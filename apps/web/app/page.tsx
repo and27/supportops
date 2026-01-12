@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 type ChatMessage = {
@@ -147,7 +148,12 @@ export default function Home() {
                             <span>Confidence: {confidence}%</span>
                           )}
                           {message.ticket_id && (
-                            <span>Ticket: {message.ticket_id}</span>
+                            <Link
+                              href={`/tickets/${message.ticket_id}`}
+                              className="underline decoration-dotted underline-offset-4"
+                            >
+                              Ticket: {message.ticket_id}
+                            </Link>
                           )}
                         </div>
                       )}
