@@ -56,6 +56,7 @@ class ChatResponse(BaseModel):
     reply: str
     action: Literal["reply", "ask_clarifying", "create_ticket", "escalate"]
     confidence: float
+    ticket_id: str | None = None
 
 
 def decide_response(message: str) -> tuple[str, str, float]:
@@ -146,6 +147,18 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         ).execute()
 
         reply, action, confidence = decide_response(payload.message)
+        ticket_id = None
+        if action in ("create_ticket", "escalate"):
+            ticket_result = supabase.table("tickets").insert(
+                {
+                    "conversation_id": conversation_id,
+                    "subject": payload.message[:160],
+                }
+            ).execute()
+            if ticket_result.data:
+                ticket_id = ticket_result.data[0].get("id")
+            if not ticket_id:
+                raise RuntimeError("ticket_insert_failed")
 
         supabase.table("messages").insert(
             {
@@ -169,6 +182,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         conversation_id=conversation_id,
         action=action,
         confidence=confidence,
+        ticket_id=ticket_id,
     )
 
     return ChatResponse(
@@ -176,4 +190,5 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         reply=reply,
         action=action,
         confidence=confidence,
+        ticket_id=ticket_id,
     )
