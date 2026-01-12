@@ -1,4 +1,5 @@
 create extension if not exists "pgcrypto";
+create extension if not exists vector;
 
 create table if not exists conversations (
   id uuid primary key default gen_random_uuid(),
@@ -41,6 +42,27 @@ create table if not exists kb_chunks (
   document_id uuid not null references kb_documents(id) on delete cascade,
   chunk_index integer not null,
   content text not null,
+  embedding vector(1536),
+  embedding_model text,
+  metadata jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists agent_runs (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid references conversations(id) on delete set null,
+  message_id uuid references messages(id) on delete set null,
+  action text not null check (action in ('reply', 'ask_clarifying', 'create_ticket', 'escalate')),
+  confidence numeric,
+  input jsonb,
+  output jsonb,
+  citations jsonb,
+  model text,
+  prompt_tokens integer,
+  completion_tokens integer,
+  total_tokens integer,
+  latency_ms integer,
+  cost_usd numeric,
   metadata jsonb,
   created_at timestamptz not null default now()
 );
@@ -49,3 +71,5 @@ create index if not exists messages_conversation_created_idx on messages(convers
 create index if not exists tickets_conversation_id_idx on tickets(conversation_id);
 create index if not exists kb_documents_tags_idx on kb_documents using gin (tags);
 create index if not exists kb_chunks_document_id_idx on kb_chunks(document_id);
+create index if not exists kb_chunks_embedding_idx on kb_chunks using ivfflat (embedding vector_cosine_ops) where embedding is not null;
+create index if not exists agent_runs_conversation_created_idx on agent_runs(conversation_id, created_at);

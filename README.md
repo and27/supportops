@@ -18,6 +18,13 @@ Run the schema against your Supabase Postgres instance:
 psql "$SUPABASE_DB_URL" -f infra/supabase/schema.sql
 ```
 
+For applying changes to an existing DB, run the latest migration in
+`infra/supabase/migrations` (example):
+
+```bash
+psql "$SUPABASE_DB_URL" -f infra/supabase/migrations/2026-01-12_v1_vector_agent_runs.sql
+```
+
 ### 2) Start the agent API
 
 ```bash
