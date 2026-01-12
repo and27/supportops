@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 type AgentRun = {
   id: string;
   conversation_id: string | null;
@@ -65,9 +67,10 @@ export default async function RunsPage() {
             <p>No runs yet. Send a chat message to create one.</p>
           )}
           {runs.map((run) => (
-            <div
+            <Link
               key={run.id}
-              className="rounded-2xl border border-line bg-white/70 px-4 py-3"
+              href={`/runs/${run.id}`}
+              className="block rounded-2xl border border-line bg-white/70 px-4 py-3 transition hover:border-ink/40"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-medium text-ink">{run.id}</span>
@@ -88,7 +91,7 @@ export default async function RunsPage() {
               <p className="mt-1 text-xs text-ink/50">
                 Created: {run.created_at ?? "unknown"}
               </p>
-            </div>
+            </Link>
           ))}
         </div>
       </section>
