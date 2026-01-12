@@ -7,6 +7,7 @@ type ChatMessage = {
   content: string;
   action?: "reply" | "ask_clarifying" | "create_ticket" | "escalate";
   confidence?: number;
+  ticket_id?: string | null;
 };
 
 export default function Home() {
@@ -60,6 +61,7 @@ export default function Home() {
         reply: string;
         action: ChatMessage["action"];
         confidence: number;
+        ticket_id?: string | null;
       };
 
       setConversationId(data.conversation_id);
@@ -70,6 +72,7 @@ export default function Home() {
           content: data.reply,
           action: data.action,
           confidence: data.confidence,
+          ticket_id: data.ticket_id ?? null,
         },
       ]);
     } catch (err) {
@@ -142,6 +145,9 @@ export default function Home() {
                           <span>Action: {message.action}</span>
                           {confidence !== null && (
                             <span>Confidence: {confidence}%</span>
+                          )}
+                          {message.ticket_id && (
+                            <span>Ticket: {message.ticket_id}</span>
                           )}
                         </div>
                       )}
