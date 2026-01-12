@@ -100,6 +100,24 @@ class TicketResponse(BaseModel):
     updated_at: str | None = None
 
 
+class AgentRunResponse(BaseModel):
+    id: str
+    conversation_id: str | None = None
+    action: str
+    confidence: float | None = None
+    input: dict[str, Any] | None = None
+    output: dict[str, Any] | None = None
+    citations: list[dict[str, Any]] | None = None
+    model: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    latency_ms: int | None = None
+    cost_usd: float | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str | None = None
+
+
 class IngestRequest(BaseModel):
     document_id: str
     chunk_size: int = 120
@@ -709,6 +727,54 @@ async def list_tickets(limit: int = 50) -> list[TicketResponse]:
         raise HTTPException(status_code=500, detail="db_error")
 
     return [TicketResponse(**ticket) for ticket in (result.data or [])]
+
+
+@app.get("/v1/runs", response_model=list[AgentRunResponse])
+async def list_runs(limit: int = 50, conversation_id: str | None = None) -> list[AgentRunResponse]:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    safe_limit = max(1, min(limit, 100))
+    try:
+        query = (
+            supabase.table("agent_runs")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(safe_limit)
+        )
+        if conversation_id:
+            query = query.eq("conversation_id", conversation_id)
+        result = query.execute()
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    return [AgentRunResponse(**run) for run in (result.data or [])]
+
+
+@app.get("/v1/runs/{run_id}", response_model=AgentRunResponse)
+async def get_run(run_id: str) -> AgentRunResponse:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    try:
+        result = (
+            supabase.table("agent_runs").select("*").eq("id", run_id).limit(1).execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", run_id=run_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="run_not_found")
+
+    return AgentRunResponse(**result.data[0])
 
 
 @app.get("/v1/kb", response_model=list[KBDocument])
