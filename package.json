@@ -1,0 +1,9 @@
+{
+  "name": "supportops",
+  "private": true,
+  "packageManager": "pnpm@9",
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:agent": "pnpm --filter agent dev"
+  }
+}
