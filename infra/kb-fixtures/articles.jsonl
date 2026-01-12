@@ -1,0 +1,7 @@
+{"title":"Password reset","content":"If you forgot your password, use the Reset Password link on the login screen. Follow the email link and choose a new password.","tags":["reset","login"]}
+{"title":"Account locked","content":"After too many failed logins, the account is locked for 15 minutes. You can also reset the password to unlock immediately.","tags":["login","lockout"]}
+{"title":"Billing update","content":"Update payment details in Settings > Billing. Changes take effect immediately on the next invoice.","tags":["billing","payments"]}
+{"title":"Two-factor authentication","content":"To update MFA, go to Settings > Security. Remove the old device and enroll a new authenticator app.","tags":["security","mfa"]}
+{"title":"Service status","content":"Check system status at status.example.com before reporting an incident. Planned maintenance appears there.","tags":["status","incident"]}
+{"title":"App crash on startup","content":"If the app crashes on startup, reboot the device, reinstall the app, and collect the error code.","tags":["crash","mobile"]}
+{"title":"Integrations setup","content":"Integrations are configured in Settings > Integrations. Create an API key and follow the provider setup guide.","tags":["integrations","api"]}
