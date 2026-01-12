@@ -64,3 +64,15 @@ pytest
 # or
 python run_eval.py
 ```
+
+### 5) Seed KB fixtures (optional)
+
+```bash
+cd infra/kb-fixtures
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+
+$env:AGENT_API_BASE_URL="http://localhost:8000"
+python seed_kb.py --ingest
+```
