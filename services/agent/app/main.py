@@ -6,13 +6,19 @@ import os
 import uuid
 from hashlib import sha256
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import requests
+from dotenv import load_dotenv
 from supabase import Client, create_client
+
+agent_root = Path(__file__).resolve().parents[1]
+load_dotenv(agent_root / ".env", override=False)
+load_dotenv(agent_root / ".env.local", override=True)
 
 app = FastAPI()
 
@@ -348,6 +354,151 @@ def get_embedding_provider() -> EmbeddingProvider:
     raise RuntimeError(f"Unsupported embedding provider: {provider_name}")
 
 
+def get_ingest_config() -> tuple[int, int, bool]:
+    chunk_size = int(os.getenv("INGEST_CHUNK_SIZE", "120"))
+    chunk_overlap = int(os.getenv("INGEST_CHUNK_OVERLAP", "20"))
+    auto_ingest = os.getenv("AUTO_INGEST_ON_KB_WRITE", "false").lower() == "true"
+    return chunk_size, chunk_overlap, auto_ingest
+
+
+def run_ingest(
+    supabase: Client,
+    provider: EmbeddingProvider,
+    document_id: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    force: bool,
+) -> IngestResponse:
+    log_event(
+        logging.INFO,
+        "ingest_start",
+        document_id=document_id,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        force=force,
+    )
+
+    try:
+        doc_result = (
+            supabase.table("kb_documents")
+            .select("*")
+            .eq("id", document_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not doc_result.data:
+        raise HTTPException(status_code=404, detail="kb_not_found")
+
+    document = doc_result.data[0]
+    chunks = chunk_text(document.get("content", ""), chunk_size, chunk_overlap)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="kb_content_empty")
+
+    chunk_hashes = [hash_chunk(chunk) for chunk in chunks]
+    unique_map: dict[str, int] = {}
+    unique_chunks: list[str] = []
+    for index, chunk_hash in enumerate(chunk_hashes):
+        if chunk_hash in unique_map:
+            continue
+        unique_map[chunk_hash] = index
+        unique_chunks.append(chunks[index])
+
+    try:
+        existing = (
+            supabase.table("kb_chunks")
+            .select("id,chunk_hash")
+            .eq("document_id", document_id)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    existing_hashes = {
+        row.get("chunk_hash"): row.get("id")
+        for row in (existing.data or [])
+        if row.get("chunk_hash")
+    }
+    new_hashes = set(unique_map.keys())
+
+    chunks_deleted = 0
+    if not force:
+        to_delete = [
+            row_id for chash, row_id in existing_hashes.items() if chash not in new_hashes
+        ]
+    else:
+        to_delete = [row_id for row_id in existing_hashes.values()]
+
+    if to_delete:
+        try:
+            supabase.table("kb_chunks").delete().in_("id", to_delete).execute()
+            chunks_deleted = len(to_delete)
+        except Exception as exc:
+            log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
+            raise HTTPException(status_code=500, detail="db_error")
+
+    if force:
+        existing_hashes = {}
+
+    to_insert_hashes = [chash for chash in unique_map.keys() if chash not in existing_hashes]
+    to_insert_chunks = [chunks[unique_map[chash]] for chash in to_insert_hashes]
+
+    chunks_inserted = 0
+    if to_insert_chunks:
+        try:
+            embeddings = provider.embed(to_insert_chunks)
+        except Exception as exc:
+            log_event(logging.ERROR, "embedding_error", error=str(exc))
+            raise HTTPException(status_code=500, detail="embedding_error")
+
+        rows = []
+        for chash, chunk, embedding in zip(to_insert_hashes, to_insert_chunks, embeddings):
+            rows.append(
+                {
+                    "document_id": document_id,
+                    "chunk_index": unique_map[chash],
+                    "content": chunk,
+                    "chunk_hash": chash,
+                    "embedding": embedding,
+                    "embedding_model": provider.model,
+                    "embedding_version": provider.version,
+                }
+            )
+        try:
+            supabase.table("kb_chunks").insert(rows).execute()
+            chunks_inserted = len(rows)
+        except Exception as exc:
+            log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
+            raise HTTPException(status_code=500, detail="db_error")
+
+    chunks_total = len(unique_chunks)
+    chunks_skipped = chunks_total - chunks_inserted
+
+    log_event(
+        logging.INFO,
+        "ingest_complete",
+        document_id=document_id,
+        chunks_total=chunks_total,
+        chunks_inserted=chunks_inserted,
+        chunks_skipped=chunks_skipped,
+        chunks_deleted=chunks_deleted,
+    )
+
+    return IngestResponse(
+        document_id=document_id,
+        chunks_total=chunks_total,
+        chunks_inserted=chunks_inserted,
+        chunks_skipped=chunks_skipped,
+        chunks_deleted=chunks_deleted,
+        embedding_model=provider.model,
+        embedding_version=provider.version,
+    )
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
     log_event(logging.WARNING, "http_error", status_code=exc.status_code, detail=exc.detail)
@@ -550,7 +701,31 @@ async def create_kb(payload: KBCreate) -> KBDocument:
     if not result.data:
         raise HTTPException(status_code=500, detail="kb_create_failed")
 
-    return KBDocument(**result.data[0])
+    doc = result.data[0]
+    _, _, auto_ingest = get_ingest_config()
+    if auto_ingest:
+        try:
+            provider = get_embedding_provider()
+            chunk_size, chunk_overlap, _ = get_ingest_config()
+            run_ingest(
+                supabase,
+                provider,
+                doc["id"],
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                force=False,
+            )
+        except Exception as exc:
+            log_event(
+                logging.WARNING,
+                "auto_ingest_failed",
+                document_id=doc.get("id"),
+                error=str(exc),
+            )
+    else:
+        log_event(logging.INFO, "auto_ingest_skipped", document_id=doc.get("id"))
+
+    return KBDocument(**doc)
 
 
 @app.get("/v1/kb/{doc_id}", response_model=KBDocument)
@@ -602,7 +777,31 @@ async def update_kb(doc_id: str, payload: KBUpdate) -> KBDocument:
     if not result.data:
         raise HTTPException(status_code=404, detail="kb_not_found")
 
-    return KBDocument(**result.data[0])
+    doc = result.data[0]
+    _, _, auto_ingest = get_ingest_config()
+    if auto_ingest:
+        try:
+            provider = get_embedding_provider()
+            chunk_size, chunk_overlap, _ = get_ingest_config()
+            run_ingest(
+                supabase,
+                provider,
+                doc["id"],
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                force=False,
+            )
+        except Exception as exc:
+            log_event(
+                logging.WARNING,
+                "auto_ingest_failed",
+                document_id=doc.get("id"),
+                error=str(exc),
+            )
+    else:
+        log_event(logging.INFO, "auto_ingest_skipped", document_id=doc.get("id"))
+
+    return KBDocument(**doc)
 
 
 @app.post("/v1/ingest", response_model=IngestResponse)
@@ -613,113 +812,11 @@ async def ingest(payload: IngestRequest) -> IngestResponse:
     except RuntimeError as exc:
         log_event(logging.ERROR, "ingest_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="ingest_not_configured")
-
-    try:
-        doc_result = (
-            supabase.table("kb_documents")
-            .select("*")
-            .eq("id", payload.document_id)
-            .limit(1)
-            .execute()
-        )
-    except Exception as exc:
-        log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
-        raise HTTPException(status_code=500, detail="db_error")
-
-    if not doc_result.data:
-        raise HTTPException(status_code=404, detail="kb_not_found")
-
-    document = doc_result.data[0]
-    chunks = chunk_text(
-        document.get("content", ""), payload.chunk_size, payload.chunk_overlap
-    )
-    if not chunks:
-        raise HTTPException(status_code=400, detail="kb_content_empty")
-
-    chunk_hashes = [hash_chunk(chunk) for chunk in chunks]
-    unique_map: dict[str, int] = {}
-    unique_chunks: list[str] = []
-    for index, chunk_hash in enumerate(chunk_hashes):
-        if chunk_hash in unique_map:
-            continue
-        unique_map[chunk_hash] = index
-        unique_chunks.append(chunks[index])
-
-    try:
-        existing = (
-            supabase.table("kb_chunks")
-            .select("id,chunk_hash")
-            .eq("document_id", payload.document_id)
-            .execute()
-        )
-    except Exception as exc:
-        log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
-        raise HTTPException(status_code=500, detail="db_error")
-
-    existing_hashes = {
-        row.get("chunk_hash"): row.get("id")
-        for row in (existing.data or [])
-        if row.get("chunk_hash")
-    }
-    new_hashes = set(unique_map.keys())
-
-    chunks_deleted = 0
-    if not payload.force:
-        to_delete = [row_id for chash, row_id in existing_hashes.items() if chash not in new_hashes]
-    else:
-        to_delete = [row_id for row_id in existing_hashes.values()]
-
-    if to_delete:
-        try:
-            supabase.table("kb_chunks").delete().in_("id", to_delete).execute()
-            chunks_deleted = len(to_delete)
-        except Exception as exc:
-            log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
-            raise HTTPException(status_code=500, detail="db_error")
-
-    if payload.force:
-        existing_hashes = {}
-
-    to_insert_hashes = [chash for chash in unique_map.keys() if chash not in existing_hashes]
-    to_insert_chunks = [chunks[unique_map[chash]] for chash in to_insert_hashes]
-
-    chunks_inserted = 0
-    if to_insert_chunks:
-        try:
-            embeddings = provider.embed(to_insert_chunks)
-        except Exception as exc:
-            log_event(logging.ERROR, "embedding_error", error=str(exc))
-            raise HTTPException(status_code=500, detail="embedding_error")
-
-        rows = []
-        for chash, chunk, embedding in zip(to_insert_hashes, to_insert_chunks, embeddings):
-            rows.append(
-                {
-                    "document_id": payload.document_id,
-                    "chunk_index": unique_map[chash],
-                    "content": chunk,
-                    "chunk_hash": chash,
-                    "embedding": embedding,
-                    "embedding_model": provider.model,
-                    "embedding_version": provider.version,
-                }
-            )
-        try:
-            supabase.table("kb_chunks").insert(rows).execute()
-            chunks_inserted = len(rows)
-        except Exception as exc:
-            log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
-            raise HTTPException(status_code=500, detail="db_error")
-
-    chunks_total = len(unique_chunks)
-    chunks_skipped = chunks_total - chunks_inserted
-
-    return IngestResponse(
-        document_id=payload.document_id,
-        chunks_total=chunks_total,
-        chunks_inserted=chunks_inserted,
-        chunks_skipped=chunks_skipped,
-        chunks_deleted=chunks_deleted,
-        embedding_model=provider.model,
-        embedding_version=provider.version,
+    return run_ingest(
+        supabase,
+        provider,
+        payload.document_id,
+        chunk_size=payload.chunk_size,
+        chunk_overlap=payload.chunk_overlap,
+        force=payload.force,
     )
