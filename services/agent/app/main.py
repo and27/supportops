@@ -293,6 +293,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         action=action,
         confidence=confidence,
         ticket_id=ticket_id,
+        citations=citations,
     )
 
 

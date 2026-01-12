@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 type KbDoc = {
@@ -32,6 +33,8 @@ export default function KbPage() {
   const [form, setForm] = useState<KbForm>(emptyForm);
   const [status, setStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const searchParams = useSearchParams();
+  const docParam = searchParams.get("doc");
 
   const loadDocs = async () => {
     setIsLoading(true);
@@ -52,6 +55,16 @@ export default function KbPage() {
   useEffect(() => {
     loadDocs();
   }, []);
+
+  useEffect(() => {
+    if (!docParam || docs.length === 0) {
+      return;
+    }
+    const match = docs.find((doc) => doc.id === docParam);
+    if (match) {
+      selectDoc(match);
+    }
+  }, [docParam, docs]);
 
   const startNew = () => {
     setSelectedId(null);

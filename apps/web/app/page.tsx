@@ -165,11 +165,18 @@ export default function Home() {
                             </Link>
                           )}
                           {message.citations && message.citations.length > 0 && (
-                            <span>
-                              Citations:{" "}
-                              {message.citations
-                                .map((citation) => citation.kb_document_id)
-                                .join(", ")}
+                            <span className="flex flex-wrap gap-2">
+                              <span>Citations:</span>
+                              {message.citations.map((citation, index) => (
+                                <Link
+                                  key={`${citation.kb_document_id}-${index}`}
+                                  href={`/kb?doc=${citation.kb_document_id}`}
+                                  className="underline decoration-dotted underline-offset-4"
+                                  title="Open in KB"
+                                >
+                                  {citation.kb_document_id}
+                                </Link>
+                              ))}
                             </span>
                           )}
                         </div>
