@@ -7,6 +7,7 @@ import requests
 
 BASE_URL = os.getenv("AGENT_API_BASE_URL", "http://localhost:8000")
 ALLOWED_ACTIONS = {"reply", "ask_clarifying", "create_ticket", "escalate"}
+VECTOR_EVALS = os.getenv("VECTOR_EVALS", "false").lower() == "true"
 
 
 def load_cases() -> list[dict]:
@@ -60,6 +61,9 @@ def run() -> int:
     for index, case in enumerate(cases, start=1):
         payload = case["input"]
         expected = case.get("expect", {})
+        if expected.get("requires_vector") and not VECTOR_EVALS:
+            print(f"[{index}] SKIP (vector evals disabled)")
+            continue
 
         try:
             response = requests.post(
@@ -90,7 +94,7 @@ def run() -> int:
                 print(f"[{index}] Missing ticket_id for create_ticket")
                 continue
 
-        if expected.get("expect_citation"):
+        if expected.get("expect_citation") and (not expected.get("requires_vector") or VECTOR_EVALS):
             citations = data.get("citations")
             if not isinstance(citations, list) or not citations:
                 failures += 1

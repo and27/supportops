@@ -6,6 +6,7 @@ import requests
 
 BASE_URL = os.getenv("AGENT_API_BASE_URL", "http://localhost:8000")
 ALLOWED_ACTIONS = {"reply", "ask_clarifying", "create_ticket", "escalate"}
+VECTOR_EVALS = os.getenv("VECTOR_EVALS", "false").lower() == "true"
 
 
 def load_cases() -> list[dict]:
@@ -54,6 +55,8 @@ def test_chat_cases() -> None:
     for case in cases:
         payload = case["input"]
         expected = case.get("expect", {})
+        if expected.get("requires_vector") and not VECTOR_EVALS:
+            continue
 
         response = requests.post(f"{BASE_URL}/v1/chat", json=payload, timeout=10)
         assert response.status_code == 200, response.text
@@ -73,7 +76,7 @@ def test_chat_cases() -> None:
             assert "ticket_id" in data
             assert isinstance(data["ticket_id"], str) and data["ticket_id"]
 
-        if expected.get("expect_citation"):
+        if expected.get("expect_citation") and (not expected.get("requires_vector") or VECTOR_EVALS):
             citations = data.get("citations")
             assert isinstance(citations, list) and citations
 

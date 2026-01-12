@@ -10,3 +10,5 @@
 {"input":{"channel":"web","message":"Need guidance on integrations setup"},"expect":{"action":"reply"}}
 {"input":{"channel":"web","message":"#reset password help"},"expect":{"action":"reply","expect_citation":true}}
 {"input":{"channel":"web","message":"#billing update card"},"expect":{"action":"reply","expect_citation":true}}
+{"input":{"channel":"web","message":"How do I reset my password?"},"expect":{"action":"reply","expect_citation":true,"requires_vector":true}}
+{"input":{"channel":"web","message":"Where can I change my credit card?"},"expect":{"action":"reply","expect_citation":true,"requires_vector":true}}
