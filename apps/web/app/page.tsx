@@ -103,8 +103,14 @@ export default function Home() {
               the team looped in with deterministic actions.
             </p>
           </div>
-          <div className="panel rounded-2xl px-5 py-4 text-xs uppercase tracking-[0.2em] text-ink/60">
-            {statusLabel}
+          <div className="flex flex-col items-start gap-3 text-xs uppercase tracking-[0.2em] text-ink/60">
+            <Link
+              href="/kb"
+              className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
+            >
+              Manage KB
+            </Link>
+            <div className="panel rounded-2xl px-5 py-4">{statusLabel}</div>
           </div>
         </header>
 
