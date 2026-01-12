@@ -47,8 +47,8 @@ $env:AGENT_API_BASE_URL="http://localhost:8000"
 pnpm dev:web
 ```
 
-Open `http://localhost:3000` for chat and `http://localhost:3000/kb` for the KB
-admin screen (create/edit articles).
+Open `http://localhost:3000` for chat, `http://localhost:3000/kb` for the KB
+admin screen, and `http://localhost:3000/runs` for recent agent runs.
 
 ### 4) Run evals
 
@@ -75,4 +75,12 @@ pip install -r requirements.txt
 
 $env:AGENT_API_BASE_URL="http://localhost:8000"
 python seed_kb.py --ingest
+```
+
+### 6) Vector evals (optional)
+Semantic evals require embeddings + vector search enabled. Opt-in with:
+
+```bash
+$env:VECTOR_EVALS="true"
+python run_eval.py
 ```
