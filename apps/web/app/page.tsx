@@ -9,6 +9,7 @@ type ChatMessage = {
   action?: "reply" | "ask_clarifying" | "create_ticket" | "escalate";
   confidence?: number;
   ticket_id?: string | null;
+  citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
 };
 
 export default function Home() {
@@ -63,6 +64,7 @@ export default function Home() {
         action: ChatMessage["action"];
         confidence: number;
         ticket_id?: string | null;
+        citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
       };
 
       setConversationId(data.conversation_id);
@@ -74,6 +76,7 @@ export default function Home() {
           action: data.action,
           confidence: data.confidence,
           ticket_id: data.ticket_id ?? null,
+          citations: data.citations ?? null,
         },
       ]);
     } catch (err) {
@@ -160,6 +163,14 @@ export default function Home() {
                             >
                               Ticket: {message.ticket_id}
                             </Link>
+                          )}
+                          {message.citations && message.citations.length > 0 && (
+                            <span>
+                              Citations:{" "}
+                              {message.citations
+                                .map((citation) => citation.kb_document_id)
+                                .join(", ")}
+                            </span>
                           )}
                         </div>
                       )}
