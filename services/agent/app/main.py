@@ -59,6 +59,16 @@ class ChatResponse(BaseModel):
     ticket_id: str | None = None
 
 
+class TicketResponse(BaseModel):
+    id: str
+    conversation_id: str | None = None
+    status: str
+    priority: str
+    subject: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 def decide_response(message: str) -> tuple[str, str, float]:
     msg = message.strip().lower()
     if not msg:
@@ -192,3 +202,26 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         confidence=confidence,
         ticket_id=ticket_id,
     )
+
+
+@app.get("/v1/tickets/{ticket_id}", response_model=TicketResponse)
+async def get_ticket(ticket_id: str) -> TicketResponse:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    try:
+        result = (
+            supabase.table("tickets").select("*").eq("id", ticket_id).limit(1).execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", ticket_id=ticket_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="ticket_not_found")
+
+    ticket = result.data[0]
+    return TicketResponse(**ticket)
