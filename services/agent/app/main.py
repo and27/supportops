@@ -320,6 +320,30 @@ async def get_ticket(ticket_id: str) -> TicketResponse:
     return TicketResponse(**ticket)
 
 
+@app.get("/v1/tickets", response_model=list[TicketResponse])
+async def list_tickets(limit: int = 50) -> list[TicketResponse]:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    safe_limit = max(1, min(limit, 100))
+    try:
+        result = (
+            supabase.table("tickets")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(safe_limit)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    return [TicketResponse(**ticket) for ticket in (result.data or [])]
+
+
 @app.get("/v1/kb", response_model=list[KBDocument])
 async def list_kb() -> list[KBDocument]:
     try:
