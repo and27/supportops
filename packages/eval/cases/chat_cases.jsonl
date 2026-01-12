@@ -1,0 +1,10 @@
+{"input":{"channel":"web","message":"Help please"},"expect":{"action":"ask_clarifying"}}
+{"input":{"channel":"web","message":"Need assistance"},"expect":{"action":"ask_clarifying"}}
+{"input":{"channel":"web","message":"Forgot my password and cannot access the portal"},"expect":{"action":"reply"}}
+{"input":{"channel":"web","message":"Payment page error when submitting"},"expect":{"action":"create_ticket"}}
+{"input":{"channel":"web","message":"App crash on startup after update"},"expect":{"action":"create_ticket"}}
+{"input":{"channel":"web","message":"Outage in dashboard"},"expect":{"action":"create_ticket"}}
+{"input":{"channel":"web","message":"Where can I update billing details"},"expect":{"action":"reply"}}
+{"input":{"channel":"web","message":"status page"},"expect":{"action":"ask_clarifying"}}
+{"input":{"channel":"web","message":"Login issue with MFA"},"expect":{"action":"create_ticket"}}
+{"input":{"channel":"web","message":"Need guidance on integrations setup"},"expect":{"action":"reply"}}
