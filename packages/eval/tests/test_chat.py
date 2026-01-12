@@ -49,5 +49,9 @@ def test_chat_cases() -> None:
         assert data["action"] in ALLOWED_ACTIONS
         assert 0 <= data["confidence"] <= 1
 
+        if data["action"] == "create_ticket":
+            assert "ticket_id" in data
+            assert isinstance(data["ticket_id"], str) and data["ticket_id"]
+
         if "action" in expected:
             assert data["action"] == expected["action"]

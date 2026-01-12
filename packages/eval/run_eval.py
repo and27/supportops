@@ -58,6 +58,13 @@ def run() -> int:
             print(f"[{index}] Invalid action: {data['action']}")
             continue
 
+        if data["action"] == "create_ticket":
+            ticket_id = data.get("ticket_id")
+            if not isinstance(ticket_id, str) or not ticket_id:
+                failures += 1
+                print(f"[{index}] Missing ticket_id for create_ticket")
+                continue
+
         confidence = data.get("confidence", -1)
         if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
             failures += 1
