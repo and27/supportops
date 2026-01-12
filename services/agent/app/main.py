@@ -7,6 +7,7 @@ import uuid
 from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal, Protocol
 
 from fastapi import FastAPI, HTTPException, Request
@@ -265,16 +266,16 @@ def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, str
 
 def retrieve_kb_vector_matches(
     supabase: Client, message: str, limit: int = 3, min_similarity: float = 0.2
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], float | None]:
     enabled = os.getenv("VECTOR_SEARCH_ENABLED", "false").lower() == "true"
     if not enabled:
-        return []
+        return [], None
 
     try:
         provider = get_embedding_provider()
     except RuntimeError as exc:
         log_event(logging.WARNING, "embedding_not_configured", error=str(exc))
-        return []
+        return [], None
 
     try:
         embedding = provider.embed([message])[0]
@@ -289,29 +290,43 @@ def retrieve_kb_vector_matches(
             )
             .execute()
         )
-        return result.data or []
+        data = result.data or []
+        top_similarity = data[0].get("similarity") if data else None
+        log_event(
+            logging.INFO,
+            "kb_vector_matches",
+            count=len(data),
+            top_similarity=top_similarity,
+            min_similarity=min_similarity,
+        )
+        return data, top_similarity
     except Exception as exc:
         log_event(logging.ERROR, "kb_vector_search_error", error=str(exc))
-        return []
+        return [], None
 
 
 def retrieve_kb_reply(
     supabase: Client, message: str
-) -> tuple[str, list[dict[str, str]], float] | None:
+) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
     limit = int(os.getenv("VECTOR_MATCH_COUNT", "3"))
     min_similarity = float(os.getenv("VECTOR_MIN_SIMILARITY", "0.2"))
 
-    vector_matches = retrieve_kb_vector_matches(
+    vector_matches, top_similarity = retrieve_kb_vector_matches(
         supabase, message, limit=limit, min_similarity=min_similarity
     )
     if vector_matches:
         reply, citations = build_kb_chunk_reply(vector_matches[0])
-        return reply, citations, 0.9
+        return (
+            reply,
+            citations,
+            0.9,
+            {"retrieval_source": "vector", "top_similarity": top_similarity},
+        )
 
     doc_matches = retrieve_kb_candidates(supabase, message)
     if doc_matches:
         reply, citations = build_kb_reply(doc_matches[0])
-        return reply, citations, 0.85
+        return reply, citations, 0.85, {"retrieval_source": "document"}
 
     return None
 
@@ -518,6 +533,7 @@ async def health() -> dict[str, bool]:
 
 @app.post("/v1/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
+    start_time = perf_counter()
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
@@ -557,8 +573,9 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
         kb_reply = retrieve_kb_reply(supabase, payload.message)
         citations = None
+        run_metadata: dict[str, Any] = {"retrieval_source": "none"}
         if kb_reply:
-            reply, citations, confidence = kb_reply
+            reply, citations, confidence, run_metadata = kb_reply
             action = "reply"
         else:
             reply, action, confidence = decide_response(payload.message)
@@ -583,6 +600,41 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 "metadata": {"citations": citations} if citations else None,
             }
         ).execute()
+
+        latency_ms = int((perf_counter() - start_time) * 1000)
+        run_input = {
+            "message": payload.message,
+            "channel": payload.channel,
+            "conversation_id": conversation_id,
+            "user_id": payload.user_id,
+        }
+        run_output = {
+            "reply": reply,
+            "action": action,
+            "confidence": confidence,
+            "ticket_id": ticket_id,
+            "citations": citations,
+        }
+        try:
+            supabase.table("agent_runs").insert(
+                {
+                    "conversation_id": conversation_id,
+                    "action": action,
+                    "confidence": confidence,
+                    "input": run_input,
+                    "output": run_output,
+                    "citations": citations,
+                    "latency_ms": latency_ms,
+                    "metadata": run_metadata,
+                }
+            ).execute()
+        except Exception as exc:
+            log_event(
+                logging.WARNING,
+                "agent_run_insert_failed",
+                conversation_id=conversation_id,
+                error=str(exc),
+            )
     except Exception as exc:
         log_event(
             logging.ERROR,
