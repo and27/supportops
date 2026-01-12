@@ -119,6 +119,12 @@ export default function Home() {
             >
               View tickets
             </Link>
+            <Link
+              href="/runs"
+              className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
+            >
+              View runs
+            </Link>
             <div className="panel rounded-2xl px-5 py-4">{statusLabel}</div>
           </div>
         </header>
