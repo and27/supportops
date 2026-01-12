@@ -42,8 +42,10 @@ create table if not exists kb_chunks (
   document_id uuid not null references kb_documents(id) on delete cascade,
   chunk_index integer not null,
   content text not null,
+  chunk_hash text,
   embedding vector(1536),
   embedding_model text,
+  embedding_version text,
   metadata jsonb,
   created_at timestamptz not null default now()
 );
@@ -72,4 +74,5 @@ create index if not exists tickets_conversation_id_idx on tickets(conversation_i
 create index if not exists kb_documents_tags_idx on kb_documents using gin (tags);
 create index if not exists kb_chunks_document_id_idx on kb_chunks(document_id);
 create index if not exists kb_chunks_embedding_idx on kb_chunks using ivfflat (embedding vector_cosine_ops) where embedding is not null;
+create unique index if not exists kb_chunks_document_hash_idx on kb_chunks(document_id, chunk_hash) where chunk_hash is not null;
 create index if not exists agent_runs_conversation_created_idx on agent_runs(conversation_id, created_at);
