@@ -21,6 +21,25 @@ def load_cases() -> list[dict]:
     return cases
 
 
+def seed_kb() -> None:
+    docs = [
+        {
+            "title": "Password reset",
+            "content": "Reset the password from the login screen and verify the email.",
+            "tags": ["reset"],
+        },
+        {
+            "title": "Billing update",
+            "content": "Update billing details in Settings > Billing.",
+            "tags": ["billing"],
+        },
+    ]
+
+    for doc in docs:
+        response = requests.post(f"{BASE_URL}/v1/kb", json=doc, timeout=10)
+        response.raise_for_status()
+
+
 def run() -> int:
     cases = load_cases()
     failures = 0
@@ -30,6 +49,12 @@ def run() -> int:
         health.raise_for_status()
     except Exception as exc:
         print(f"Health check failed: {exc}")
+        return 2
+
+    try:
+        seed_kb()
+    except Exception as exc:
+        print(f"KB seed failed: {exc}")
         return 2
 
     for index, case in enumerate(cases, start=1):
@@ -63,6 +88,13 @@ def run() -> int:
             if not isinstance(ticket_id, str) or not ticket_id:
                 failures += 1
                 print(f"[{index}] Missing ticket_id for create_ticket")
+                continue
+
+        if expected.get("expect_citation"):
+            citations = data.get("citations")
+            if not isinstance(citations, list) or not citations:
+                failures += 1
+                print(f"[{index}] Missing citations for KB response")
                 continue
 
         confidence = data.get("confidence", -1)

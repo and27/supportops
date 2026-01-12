@@ -20,6 +20,25 @@ def load_cases() -> list[dict]:
     return cases
 
 
+def seed_kb() -> None:
+    docs = [
+        {
+            "title": "Password reset",
+            "content": "Reset the password from the login screen and verify the email.",
+            "tags": ["reset"],
+        },
+        {
+            "title": "Billing update",
+            "content": "Update billing details in Settings > Billing.",
+            "tags": ["billing"],
+        },
+    ]
+
+    for doc in docs:
+        response = requests.post(f"{BASE_URL}/v1/kb", json=doc, timeout=10)
+        assert response.status_code == 201, response.text
+
+
 def test_health() -> None:
     response = requests.get(f"{BASE_URL}/health", timeout=5)
     assert response.status_code == 200
@@ -30,6 +49,7 @@ def test_health() -> None:
 def test_chat_cases() -> None:
     cases = load_cases()
     assert len(cases) >= 10
+    seed_kb()
 
     for case in cases:
         payload = case["input"]
@@ -52,6 +72,10 @@ def test_chat_cases() -> None:
         if data["action"] == "create_ticket":
             assert "ticket_id" in data
             assert isinstance(data["ticket_id"], str) and data["ticket_id"]
+
+        if expected.get("expect_citation"):
+            citations = data.get("citations")
+            assert isinstance(citations, list) and citations
 
         if "action" in expected:
             assert data["action"] == expected["action"]
