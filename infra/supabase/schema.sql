@@ -70,7 +70,7 @@ create table if not exists agent_runs (
 );
 
 create or replace function match_kb_chunks(
-  query_embedding vector(1536),
+  query_embedding jsonb,
   match_count int default 5,
   min_similarity float default 0.2
 )
@@ -84,18 +84,24 @@ returns table (
 )
 language sql stable
 as $$
+  with query as (
+    select array_agg(value::float4) as vec
+    from jsonb_array_elements_text(query_embedding) as t(value)
+  )
   select
     kc.id,
     kc.document_id,
     kc.chunk_index,
     kc.content,
     kd.title as document_title,
-    1 - (kc.embedding <=> query_embedding) as similarity
+    1 - (kc.embedding <=> query.vec::vector) as similarity
   from kb_chunks kc
   join kb_documents kd on kd.id = kc.document_id
+  cross join query
   where kc.embedding is not null
-    and 1 - (kc.embedding <=> query_embedding) >= min_similarity
-  order by kc.embedding <=> query_embedding
+    and query.vec is not null
+    and 1 - (kc.embedding <=> query.vec::vector) >= min_similarity
+  order by kc.embedding <=> query.vec::vector
   limit match_count;
 $$;
 
