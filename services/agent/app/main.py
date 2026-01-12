@@ -4,12 +4,14 @@ import json
 import logging
 import os
 import uuid
+from hashlib import sha256
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+import requests
 from supabase import Client, create_client
 
 app = FastAPI()
@@ -89,6 +91,53 @@ class TicketResponse(BaseModel):
     subject: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+
+
+class IngestRequest(BaseModel):
+    document_id: str
+    chunk_size: int = 120
+    chunk_overlap: int = 20
+    force: bool = False
+
+
+class IngestResponse(BaseModel):
+    document_id: str
+    chunks_total: int
+    chunks_inserted: int
+    chunks_skipped: int
+    chunks_deleted: int
+    embedding_model: str
+    embedding_version: str | None = None
+
+
+class EmbeddingProvider(Protocol):
+    model: str
+    version: str | None
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        ...
+
+
+class OpenAIEmbeddingProvider:
+    def __init__(self, api_key: str, model: str, version: str | None = None) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.version = version
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        response = requests.post(
+            "https://api.openai.com/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": self.model, "input": texts},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = sorted(payload.get("data", []), key=lambda item: item.get("index", 0))
+        return [item["embedding"] for item in data]
 
 
 def decide_response(message: str) -> tuple[str, str, float]:
@@ -181,6 +230,44 @@ def build_kb_reply(document: dict[str, Any]) -> tuple[str, list[dict[str, str]]]
     reply = f"{title}: {excerpt}"
     citations = [{"kb_document_id": document.get("id", "")}]
     return reply, citations
+
+
+def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return []
+
+    size = max(1, min(chunk_size, 400))
+    overlap = max(0, min(chunk_overlap, size - 1))
+
+    chunks = []
+    start = 0
+    while start < len(words):
+        end = min(len(words), start + size)
+        chunk = " ".join(words[start:end]).strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(words):
+            break
+        start = max(0, end - overlap)
+    return chunks
+
+
+def hash_chunk(content: str) -> str:
+    return sha256(content.encode("utf-8")).hexdigest()
+
+
+def get_embedding_provider() -> EmbeddingProvider:
+    provider_name = (os.getenv("EMBEDDING_PROVIDER") or "openai").lower()
+    if provider_name == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+        version = os.getenv("EMBEDDING_VERSION")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set")
+        return OpenAIEmbeddingProvider(api_key=api_key, model=model, version=version)
+
+    raise RuntimeError(f"Unsupported embedding provider: {provider_name}")
 
 
 @app.exception_handler(HTTPException)
@@ -439,3 +526,123 @@ async def update_kb(doc_id: str, payload: KBUpdate) -> KBDocument:
         raise HTTPException(status_code=404, detail="kb_not_found")
 
     return KBDocument(**result.data[0])
+
+
+@app.post("/v1/ingest", response_model=IngestResponse)
+async def ingest(payload: IngestRequest) -> IngestResponse:
+    try:
+        supabase = get_supabase_client()
+        provider = get_embedding_provider()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "ingest_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="ingest_not_configured")
+
+    try:
+        doc_result = (
+            supabase.table("kb_documents")
+            .select("*")
+            .eq("id", payload.document_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not doc_result.data:
+        raise HTTPException(status_code=404, detail="kb_not_found")
+
+    document = doc_result.data[0]
+    chunks = chunk_text(
+        document.get("content", ""), payload.chunk_size, payload.chunk_overlap
+    )
+    if not chunks:
+        raise HTTPException(status_code=400, detail="kb_content_empty")
+
+    chunk_hashes = [hash_chunk(chunk) for chunk in chunks]
+    unique_map: dict[str, int] = {}
+    unique_chunks: list[str] = []
+    for index, chunk_hash in enumerate(chunk_hashes):
+        if chunk_hash in unique_map:
+            continue
+        unique_map[chunk_hash] = index
+        unique_chunks.append(chunks[index])
+
+    try:
+        existing = (
+            supabase.table("kb_chunks")
+            .select("id,chunk_hash")
+            .eq("document_id", payload.document_id)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    existing_hashes = {
+        row.get("chunk_hash"): row.get("id")
+        for row in (existing.data or [])
+        if row.get("chunk_hash")
+    }
+    new_hashes = set(unique_map.keys())
+
+    chunks_deleted = 0
+    if not payload.force:
+        to_delete = [row_id for chash, row_id in existing_hashes.items() if chash not in new_hashes]
+    else:
+        to_delete = [row_id for row_id in existing_hashes.values()]
+
+    if to_delete:
+        try:
+            supabase.table("kb_chunks").delete().in_("id", to_delete).execute()
+            chunks_deleted = len(to_delete)
+        except Exception as exc:
+            log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
+            raise HTTPException(status_code=500, detail="db_error")
+
+    if payload.force:
+        existing_hashes = {}
+
+    to_insert_hashes = [chash for chash in unique_map.keys() if chash not in existing_hashes]
+    to_insert_chunks = [chunks[unique_map[chash]] for chash in to_insert_hashes]
+
+    chunks_inserted = 0
+    if to_insert_chunks:
+        try:
+            embeddings = provider.embed(to_insert_chunks)
+        except Exception as exc:
+            log_event(logging.ERROR, "embedding_error", error=str(exc))
+            raise HTTPException(status_code=500, detail="embedding_error")
+
+        rows = []
+        for chash, chunk, embedding in zip(to_insert_hashes, to_insert_chunks, embeddings):
+            rows.append(
+                {
+                    "document_id": payload.document_id,
+                    "chunk_index": unique_map[chash],
+                    "content": chunk,
+                    "chunk_hash": chash,
+                    "embedding": embedding,
+                    "embedding_model": provider.model,
+                    "embedding_version": provider.version,
+                }
+            )
+        try:
+            supabase.table("kb_chunks").insert(rows).execute()
+            chunks_inserted = len(rows)
+        except Exception as exc:
+            log_event(logging.ERROR, "db_error", doc_id=payload.document_id, error=str(exc))
+            raise HTTPException(status_code=500, detail="db_error")
+
+    chunks_total = len(unique_chunks)
+    chunks_skipped = chunks_total - chunks_inserted
+
+    return IngestResponse(
+        document_id=payload.document_id,
+        chunks_total=chunks_total,
+        chunks_inserted=chunks_inserted,
+        chunks_skipped=chunks_skipped,
+        chunks_deleted=chunks_deleted,
+        embedding_model=provider.model,
+        embedding_version=provider.version,
+    )
