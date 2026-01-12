@@ -136,6 +136,15 @@ class OpenAIEmbeddingProvider:
         )
         response.raise_for_status()
         payload = response.json()
+        usage = payload.get("usage", {})
+        log_event(
+            logging.INFO,
+            "embedding_usage",
+            model=self.model,
+            input_count=len(texts),
+            prompt_tokens=usage.get("prompt_tokens"),
+            total_tokens=usage.get("total_tokens"),
+        )
         data = sorted(payload.get("data", []), key=lambda item: item.get("index", 0))
         return [item["embedding"] for item in data]
 
@@ -232,6 +241,75 @@ def build_kb_reply(document: dict[str, Any]) -> tuple[str, list[dict[str, str]]]
     return reply, citations
 
 
+def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+    title = chunk.get("document_title") or "Knowledge Base"
+    content = chunk.get("content", "")
+    excerpt = content.strip().replace("\n", " ")
+    if len(excerpt) > 360:
+        excerpt = f"{excerpt[:360].rstrip()}..."
+    reply = f"{title}: {excerpt}"
+    citations = [
+        {
+            "kb_document_id": chunk.get("document_id", ""),
+            "kb_chunk_id": chunk.get("id", ""),
+        }
+    ]
+    return reply, citations
+
+
+def retrieve_kb_vector_matches(
+    supabase: Client, message: str, limit: int = 3, min_similarity: float = 0.2
+) -> list[dict[str, Any]]:
+    enabled = os.getenv("VECTOR_SEARCH_ENABLED", "false").lower() == "true"
+    if not enabled:
+        return []
+
+    try:
+        provider = get_embedding_provider()
+    except RuntimeError as exc:
+        log_event(logging.WARNING, "embedding_not_configured", error=str(exc))
+        return []
+
+    try:
+        embedding = provider.embed([message])[0]
+        result = (
+            supabase.rpc(
+                "match_kb_chunks",
+                {
+                    "query_embedding": embedding,
+                    "match_count": limit,
+                    "min_similarity": min_similarity,
+                },
+            )
+            .execute()
+        )
+        return result.data or []
+    except Exception as exc:
+        log_event(logging.ERROR, "kb_vector_search_error", error=str(exc))
+        return []
+
+
+def retrieve_kb_reply(
+    supabase: Client, message: str
+) -> tuple[str, list[dict[str, str]], float] | None:
+    limit = int(os.getenv("VECTOR_MATCH_COUNT", "3"))
+    min_similarity = float(os.getenv("VECTOR_MIN_SIMILARITY", "0.2"))
+
+    vector_matches = retrieve_kb_vector_matches(
+        supabase, message, limit=limit, min_similarity=min_similarity
+    )
+    if vector_matches:
+        reply, citations = build_kb_chunk_reply(vector_matches[0])
+        return reply, citations, 0.9
+
+    doc_matches = retrieve_kb_candidates(supabase, message)
+    if doc_matches:
+        reply, citations = build_kb_reply(doc_matches[0])
+        return reply, citations, 0.85
+
+    return None
+
+
 def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
     words = text.split()
     if not words:
@@ -326,12 +404,11 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             }
         ).execute()
 
-        kb_candidates = retrieve_kb_candidates(supabase, payload.message)
+        kb_reply = retrieve_kb_reply(supabase, payload.message)
         citations = None
-        if kb_candidates:
-            reply, citations = build_kb_reply(kb_candidates[0])
+        if kb_reply:
+            reply, citations, confidence = kb_reply
             action = "reply"
-            confidence = 0.85
         else:
             reply, action, confidence = decide_response(payload.message)
         ticket_id = None
