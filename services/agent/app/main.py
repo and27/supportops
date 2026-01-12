@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from hashlib import sha256
 from datetime import datetime, timezone
@@ -205,6 +206,44 @@ def decide_response(message: str) -> tuple[str, str, float]:
     )
 
 
+def precheck_action(message: str) -> tuple[str, str, float] | None:
+    msg = message.strip().lower()
+    tags = extract_hash_tags(msg)
+    if "#" in msg:
+        log_event(
+            logging.INFO,
+            "precheck_hashtag_parsed",
+            tags=tags,
+            word_count=len(msg.split()),
+        )
+    if not msg:  # empty or whitespace
+        return (
+            "Please share a bit more detail so I can help.",
+            "ask_clarifying",
+            0.2,
+        )
+
+    ticket_keywords = ("bug", "error", "issue", "incident", "crash", "outage", "fail")
+    if any(keyword in msg for keyword in ticket_keywords):
+        return (
+            "Thanks for reporting this. I am creating a ticket and will follow up with next steps.",
+            "create_ticket",
+            0.35,
+        )
+
+    if tags:
+        return None
+
+    if len(msg.split()) < 4:
+        return (
+            "Can you add more context (account, steps, and expected behavior)?",
+            "ask_clarifying",
+            0.45,
+        )
+
+    return None
+
+
 def normalize_tags(tags: list[str]) -> list[str]:
     normalized = []
     for tag in tags:
@@ -222,6 +261,12 @@ def extract_hash_tags(message: str) -> list[str]:
     return normalize_tags(tags)
 
 
+def extract_keywords(message: str) -> list[str]:
+    tokens = re.split(r"[^a-zA-Z0-9]+", message.lower())
+    keywords = [token for token in tokens if len(token) > 3]
+    return keywords[:5]
+
+
 def retrieve_kb_candidates(
     supabase: Client, message: str, limit: int = 3
 ) -> list[dict[str, Any]]:
@@ -232,15 +277,37 @@ def retrieve_kb_candidates(
     tags = extract_hash_tags(query)
     try:
         if tags:
+            tag_value = tags[0]
             tagged = (
                 supabase.table("kb_documents")
                 .select("*")
-                .contains("tags", [tags[0]])
+                .contains("tags", [tag_value])
                 .limit(limit)
                 .execute()
             )
+            log_event(
+                logging.INFO,
+                "kb_tag_lookup",
+                tag=tag_value,
+                match_count=len(tagged.data or []),
+            )
             if tagged.data:
                 return tagged.data
+
+        keywords = extract_keywords(query)
+        if keywords:
+            or_parts = []
+            for keyword in keywords:
+                or_parts.append(f"title.ilike.%{keyword}%")
+                or_parts.append(f"content.ilike.%{keyword}%")
+            text = (
+                supabase.table("kb_documents")
+                .select("*")
+                .or_(",".join(or_parts))
+                .limit(limit)
+                .execute()
+            )
+            return text.data or []
 
         text = (
             supabase.table("kb_documents")
@@ -589,14 +656,21 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             }
         ).execute()
 
-        kb_reply = retrieve_kb_reply(supabase, payload.message)
+        kb_reply = None
         citations = None
         run_metadata: dict[str, Any] = {"retrieval_source": "none"}
-        if kb_reply:
-            reply, citations, confidence, run_metadata = kb_reply
-            action = "reply"
+
+        precheck = precheck_action(payload.message)
+        if precheck:
+            reply, action, confidence = precheck
+            run_metadata["precheck_action"] = action
         else:
-            reply, action, confidence = decide_response(payload.message)
+            kb_reply = retrieve_kb_reply(supabase, payload.message)
+            if kb_reply:
+                reply, citations, confidence, run_metadata = kb_reply
+                action = "reply"
+            else:
+                reply, action, confidence = decide_response(payload.message)
         ticket_id = None
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
