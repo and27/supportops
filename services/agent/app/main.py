@@ -57,6 +57,28 @@ class ChatResponse(BaseModel):
     action: Literal["reply", "ask_clarifying", "create_ticket", "escalate"]
     confidence: float
     ticket_id: str | None = None
+    citations: list[dict[str, str]] | None = None
+
+
+class KBDocument(BaseModel):
+    id: str
+    title: str
+    content: str
+    tags: list[str]
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class KBCreate(BaseModel):
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list)
+
+
+class KBUpdate(BaseModel):
+    title: str | None = None
+    content: str | None = None
+    tags: list[str] | None = None
 
 
 class TicketResponse(BaseModel):
@@ -98,6 +120,67 @@ def decide_response(message: str) -> tuple[str, str, float]:
         "reply",
         0.7,
     )
+
+
+def normalize_tags(tags: list[str]) -> list[str]:
+    normalized = []
+    for tag in tags:
+        clean = tag.strip().lower()
+        if clean:
+            normalized.append(clean)
+    return sorted(set(normalized))
+
+
+def extract_hash_tags(message: str) -> list[str]:
+    tags = []
+    for word in message.split():
+        if word.startswith("#") and len(word) > 1:
+            tags.append(word[1:])
+    return normalize_tags(tags)
+
+
+def retrieve_kb_candidates(
+    supabase: Client, message: str, limit: int = 3
+) -> list[dict[str, Any]]:
+    query = message.strip().replace(",", " ")
+    if not query:
+        return []
+
+    tags = extract_hash_tags(query)
+    try:
+        if tags:
+            tagged = (
+                supabase.table("kb_documents")
+                .select("*")
+                .contains("tags", [tags[0]])
+                .limit(limit)
+                .execute()
+            )
+            if tagged.data:
+                return tagged.data
+
+        text = (
+            supabase.table("kb_documents")
+            .select("*")
+            .or_(f"title.ilike.%{query}%,content.ilike.%{query}%")
+            .limit(limit)
+            .execute()
+        )
+        return text.data or []
+    except Exception as exc:
+        log_event(logging.ERROR, "kb_retrieval_error", error=str(exc))
+        return []
+
+
+def build_kb_reply(document: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+    title = document.get("title", "Knowledge Base")
+    content = document.get("content", "")
+    excerpt = content.strip().replace("\n", " ")
+    if len(excerpt) > 360:
+        excerpt = f"{excerpt[:360].rstrip()}..."
+    reply = f"{title}: {excerpt}"
+    citations = [{"kb_document_id": document.get("id", "")}]
+    return reply, citations
 
 
 @app.exception_handler(HTTPException)
@@ -156,7 +239,14 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             }
         ).execute()
 
-        reply, action, confidence = decide_response(payload.message)
+        kb_candidates = retrieve_kb_candidates(supabase, payload.message)
+        citations = None
+        if kb_candidates:
+            reply, citations = build_kb_reply(kb_candidates[0])
+            action = "reply"
+            confidence = 0.85
+        else:
+            reply, action, confidence = decide_response(payload.message)
         ticket_id = None
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
@@ -175,6 +265,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 "conversation_id": conversation_id,
                 "role": "assistant",
                 "content": reply,
+                "metadata": {"citations": citations} if citations else None,
             }
         ).execute()
     except Exception as exc:
@@ -193,6 +284,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         action=action,
         confidence=confidence,
         ticket_id=ticket_id,
+        citations=citations,
     )
 
     return ChatResponse(
@@ -225,3 +317,100 @@ async def get_ticket(ticket_id: str) -> TicketResponse:
 
     ticket = result.data[0]
     return TicketResponse(**ticket)
+
+
+@app.get("/v1/kb", response_model=list[KBDocument])
+async def list_kb() -> list[KBDocument]:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    try:
+        result = (
+            supabase.table("kb_documents")
+            .select("*")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    return [KBDocument(**doc) for doc in (result.data or [])]
+
+
+@app.post("/v1/kb", response_model=KBDocument, status_code=201)
+async def create_kb(payload: KBCreate) -> KBDocument:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    data = payload.model_dump()
+    data["tags"] = normalize_tags(data.get("tags") or [])
+
+    try:
+        result = supabase.table("kb_documents").insert(data).execute()
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=500, detail="kb_create_failed")
+
+    return KBDocument(**result.data[0])
+
+
+@app.get("/v1/kb/{doc_id}", response_model=KBDocument)
+async def get_kb(doc_id: str) -> KBDocument:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    try:
+        result = (
+            supabase.table("kb_documents").select("*").eq("id", doc_id).limit(1).execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=doc_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="kb_not_found")
+
+    return KBDocument(**result.data[0])
+
+
+@app.patch("/v1/kb/{doc_id}", response_model=KBDocument)
+async def update_kb(doc_id: str, payload: KBUpdate) -> KBDocument:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "tags" in updates and updates["tags"] is not None:
+        updates["tags"] = normalize_tags(updates["tags"])
+    updates["updated_at"] = utc_now()
+
+    try:
+        result = (
+            supabase.table("kb_documents")
+            .update(updates)
+            .eq("id", doc_id)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=doc_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="kb_not_found")
+
+    return KBDocument(**result.data[0])
