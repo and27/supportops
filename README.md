@@ -40,6 +40,9 @@ $env:AGENT_API_BASE_URL="http://localhost:8000"
 pnpm dev:web
 ```
 
+Open `http://localhost:3000` for chat and `http://localhost:3000/kb` for the KB
+admin screen (create/edit articles).
+
 ### 4) Run evals
 
 ```bash
