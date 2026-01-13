@@ -7,7 +7,7 @@
 {"input":{"channel":"web","message":"Where can I update billing details"},"expect":{"action":"reply"}}
 {"input":{"channel":"web","message":"status page"},"expect":{"action":"ask_clarifying"}}
 {"input":{"channel":"web","message":"Login issue with MFA"},"expect":{"action":"create_ticket"}}
-{"input":{"channel":"web","message":"Need guidance on integrations setup"},"expect":{"action":"reply"}}
+{"input":{"channel":"web","message":"Need guidance on integrations setup"},"expect":{"action":"ask_clarifying"}}
 {"input":{"channel":"web","message":"#reset password help"},"expect":{"action":"reply","expect_citation":true}}
 {"input":{"channel":"web","message":"#billing update card"},"expect":{"action":"reply","expect_citation":true}}
 {"input":{"channel":"web","message":"How do I reset my password?"},"expect":{"action":"reply","expect_citation":true,"requires_vector":true}}
