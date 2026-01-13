@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import LogoutButton from "../../components/LogoutButton";
 import OrgSwitcher from "../../components/OrgSwitcher";
 import { readOrgIdCookie } from "../../lib/org";
 
@@ -156,6 +157,7 @@ export default function KbPage() {
         </div>
         <div className="flex flex-col items-start gap-3">
           <OrgSwitcher />
+          <LogoutButton />
           <Link
             href="/"
             className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"

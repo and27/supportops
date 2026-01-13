@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 
+import LogoutButton from "../../../components/LogoutButton";
 import OrgSwitcher from "../../../components/OrgSwitcher";
 
 type AgentRun = {
@@ -99,7 +100,10 @@ export default async function RunDetailPage({
               Created: {run.created_at ?? "unknown"}
             </p>
           </div>
-          <OrgSwitcher />
+          <div className="flex flex-col items-start gap-3">
+            <OrgSwitcher />
+            <LogoutButton />
+          </div>
         </div>
       </header>
 

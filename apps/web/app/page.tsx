@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import LogoutButton from "../components/LogoutButton";
 import OrgSwitcher from "../components/OrgSwitcher";
 import { readOrgIdCookie } from "../lib/org";
 
@@ -118,6 +119,7 @@ export default function Home() {
           </div>
           <div className="flex flex-col items-start gap-3 text-xs uppercase tracking-[0.2em] text-ink/60">
             <OrgSwitcher />
+            <LogoutButton />
             <Link
               href="/login"
               className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
