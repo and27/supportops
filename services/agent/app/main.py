@@ -15,6 +15,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import requests
+import jwt
+from jwt import InvalidTokenError
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
@@ -54,6 +56,87 @@ def get_supabase_client() -> Client:
     return _supabase
 
 
+def auth_enabled() -> bool:
+    return os.getenv("AUTH_ENABLED", "false").lower() == "true"
+
+
+def get_auth_user(request: Request) -> str | None:
+    if not auth_enabled():
+        return None
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="auth_required")
+    token = auth_header.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="auth_required")
+    secret = os.getenv("SUPABASE_JWT_SECRET")
+    if not secret:
+        raise HTTPException(status_code=500, detail="auth_not_configured")
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
+    except InvalidTokenError:
+        raise HTTPException(status_code=401, detail="invalid_token")
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_token")
+    return user_id
+
+
+def load_memberships(supabase: Client, user_id: str) -> list[dict[str, Any]]:
+    try:
+        result = (
+            supabase.table("members")
+            .select("org_id, role")
+            .eq("user_id", user_id)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc), user_id=user_id)
+        raise HTTPException(status_code=500, detail="db_error")
+    return result.data or []
+
+
+def get_member_role(supabase: Client, org_id: str, user_id: str) -> str:
+    memberships = load_memberships(supabase, user_id)
+    for membership in memberships:
+        if membership.get("org_id") == org_id:
+            return membership.get("role") or "viewer"
+    raise HTTPException(status_code=403, detail="org_forbidden")
+
+
+def ensure_write_access(
+    request: Request,
+    supabase: Client,
+    org_id: str,
+    user_id: str | None,
+) -> None:
+    if auth_enabled():
+        if not user_id:
+            raise HTTPException(status_code=401, detail="auth_required")
+        role = get_member_role(supabase, org_id, user_id)
+        if role == "viewer":
+            raise HTTPException(status_code=403, detail="forbidden")
+        return
+    role = request.headers.get("x-org-role", "").lower()
+    if role == "viewer":
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
+def ensure_admin_access(supabase: Client, org_id: str, user_id: str | None) -> None:
+    if not auth_enabled():
+        return
+    if not user_id:
+        raise HTTPException(status_code=401, detail="auth_required")
+    role = get_member_role(supabase, org_id, user_id)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
 def get_default_org_id(supabase: Client) -> str:
     global _default_org_id
     if _default_org_id:
@@ -77,20 +160,39 @@ def resolve_org_id(
     supabase: Client,
     request: Request | None = None,
     payload_org_id: str | None = None,
+    user_id: str | None = None,
 ) -> str:
     org_id = payload_org_id
     if request is not None:
         org_id = org_id or request.headers.get("x-org-id")
         org_id = org_id or request.query_params.get("org_id")
+    if auth_enabled():
+        if not user_id:
+            raise HTTPException(status_code=401, detail="auth_required")
+        memberships = load_memberships(supabase, user_id)
+        org_ids = [member.get("org_id") for member in memberships if member.get("org_id")]
+        if not org_ids:
+            raise HTTPException(status_code=403, detail="org_forbidden")
+        if org_id:
+            if org_id not in org_ids:
+                raise HTTPException(status_code=403, detail="org_forbidden")
+            return org_id
+        if len(org_ids) == 1:
+            return org_ids[0]
+        raise HTTPException(status_code=400, detail="org_required")
     if org_id:
         return org_id
     return get_default_org_id(supabase)
 
 
-def ensure_write_access(request: Request) -> None:
-    role = request.headers.get("x-org-role", "").lower()
-    if role == "viewer":
-        raise HTTPException(status_code=403, detail="forbidden")
+def resolve_org_context(
+    supabase: Client,
+    request: Request,
+    payload_org_id: str | None = None,
+) -> tuple[str, str | None]:
+    user_id = get_auth_user(request)
+    org_id = resolve_org_id(supabase, request, payload_org_id, user_id)
+    return org_id, user_id
 
 
 class ChatRequest(BaseModel):
@@ -710,7 +812,8 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id = resolve_org_id(supabase, request, payload.org_id)
+    org_id, auth_user_id = resolve_org_context(supabase, request, payload.org_id)
+    user_id = auth_user_id or payload.user_id
     conversation_id = payload.conversation_id or str(uuid.uuid4())
     client_host = request.client.host if request.client else "unknown"
 
@@ -718,7 +821,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         logging.INFO,
         "chat_request",
         conversation_id=conversation_id,
-        user_id=payload.user_id,
+        user_id=user_id,
         org_id=org_id,
         channel=payload.channel,
         client_ip=client_host,
@@ -730,7 +833,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 {
                     "id": conversation_id,
                     "org_id": org_id,
-                    "user_id": payload.user_id,
+                    "user_id": user_id,
                     "channel": payload.channel,
                     "metadata": payload.metadata,
                 }
@@ -787,7 +890,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             "message": payload.message,
             "channel": payload.channel,
             "conversation_id": conversation_id,
-            "user_id": payload.user_id,
+            "user_id": user_id,
             "org_id": org_id,
         }
         run_output = {
@@ -848,7 +951,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
 
 @app.get("/v1/orgs", response_model=list[OrgResponse])
-async def list_orgs() -> list[OrgResponse]:
+async def list_orgs(request: Request) -> list[OrgResponse]:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
@@ -856,9 +959,28 @@ async def list_orgs() -> list[OrgResponse]:
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     try:
-        result = (
-            supabase.table("orgs").select("*").order("created_at", desc=True).execute()
-        )
+        if auth_enabled():
+            user_id = get_auth_user(request)
+            memberships = load_memberships(supabase, user_id)
+            org_ids = [
+                member.get("org_id") for member in memberships if member.get("org_id")
+            ]
+            if not org_ids:
+                return []
+            result = (
+                supabase.table("orgs")
+                .select("*")
+                .in_("id", org_ids)
+                .order("created_at", desc=True)
+                .execute()
+            )
+        else:
+            result = (
+                supabase.table("orgs")
+                .select("*")
+                .order("created_at", desc=True)
+                .execute()
+            )
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
@@ -874,7 +996,7 @@ async def create_org(payload: OrgCreate, request: Request) -> OrgResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    ensure_write_access(request)
+    user_id = get_auth_user(request)
     data = payload.model_dump()
     data["slug"] = data["slug"].strip().lower()
     try:
@@ -885,17 +1007,30 @@ async def create_org(payload: OrgCreate, request: Request) -> OrgResponse:
 
     if not result.data:
         raise HTTPException(status_code=500, detail="org_create_failed")
-    return OrgResponse(**result.data[0])
+
+    org = result.data[0]
+    if auth_enabled() and user_id:
+        try:
+            supabase.table("members").insert(
+                {"org_id": org["id"], "user_id": user_id, "role": "admin"}
+            ).execute()
+        except Exception as exc:
+            log_event(logging.ERROR, "db_error", error=str(exc))
+            raise HTTPException(status_code=500, detail="member_create_failed")
+    return OrgResponse(**org)
 
 
 @app.get("/v1/orgs/{org_id}", response_model=OrgResponse)
-async def get_org(org_id: str) -> OrgResponse:
+async def get_org(org_id: str, request: Request) -> OrgResponse:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    user_id = get_auth_user(request)
+    if auth_enabled():
+        resolve_org_id(supabase, request, org_id, user_id)
     try:
         result = supabase.table("orgs").select("*").eq("id", org_id).limit(1).execute()
     except Exception as exc:
@@ -916,7 +1051,7 @@ async def list_members(request: Request, org_id: str | None = None) -> list[Memb
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    resolved_org_id = resolve_org_id(supabase, request, org_id)
+    resolved_org_id, _ = resolve_org_context(supabase, request, org_id)
     try:
         result = (
             supabase.table("members")
@@ -940,8 +1075,8 @@ async def create_member(payload: MemberCreate, request: Request) -> MemberRespon
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    ensure_write_access(request)
-    org_id = resolve_org_id(supabase, request, payload.org_id)
+    org_id, user_id = resolve_org_context(supabase, request, payload.org_id)
+    ensure_admin_access(supabase, org_id, user_id)
     data = payload.model_dump()
     data["org_id"] = org_id
     try:
@@ -964,7 +1099,7 @@ async def get_ticket(ticket_id: str, request: Request) -> TicketResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id = resolve_org_id(supabase, request)
+    org_id, _ = resolve_org_context(supabase, request)
     try:
         result = (
             supabase.table("tickets")
@@ -993,7 +1128,7 @@ async def list_tickets(request: Request, limit: int = 50) -> list[TicketResponse
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id = resolve_org_id(supabase, request)
+    org_id, _ = resolve_org_context(supabase, request)
     safe_limit = max(1, min(limit, 100))
     try:
         result = (
@@ -1023,7 +1158,7 @@ async def list_runs(
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id = resolve_org_id(supabase, request)
+    org_id, _ = resolve_org_context(supabase, request)
     safe_limit = max(1, min(limit, 100))
     try:
         query = (
@@ -1051,7 +1186,7 @@ async def get_run(run_id: str, request: Request) -> AgentRunResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id = resolve_org_id(supabase, request)
+    org_id, _ = resolve_org_context(supabase, request)
     try:
         result = (
             supabase.table("agent_runs")
@@ -1079,7 +1214,7 @@ async def list_kb(request: Request) -> list[KBDocument]:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id = resolve_org_id(supabase, request)
+    org_id, _ = resolve_org_context(supabase, request)
     try:
         result = (
             supabase.table("kb_documents")
@@ -1103,8 +1238,8 @@ async def create_kb(payload: KBCreate, request: Request) -> KBDocument:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    ensure_write_access(request)
-    org_id = resolve_org_id(supabase, request, payload.org_id)
+    org_id, user_id = resolve_org_context(supabase, request, payload.org_id)
+    ensure_write_access(request, supabase, org_id, user_id)
     data = payload.model_dump()
     data["tags"] = normalize_tags(data.get("tags") or [])
     data["org_id"] = org_id
@@ -1154,7 +1289,7 @@ async def get_kb(doc_id: str, request: Request) -> KBDocument:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id = resolve_org_id(supabase, request)
+    org_id, _ = resolve_org_context(supabase, request)
     try:
         result = (
             supabase.table("kb_documents")
@@ -1182,8 +1317,8 @@ async def update_kb(doc_id: str, payload: KBUpdate, request: Request) -> KBDocum
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    ensure_write_access(request)
-    org_id = resolve_org_id(supabase, request)
+    org_id, user_id = resolve_org_context(supabase, request)
+    ensure_write_access(request, supabase, org_id, user_id)
     updates = payload.model_dump(exclude_unset=True)
     if "tags" in updates and updates["tags"] is not None:
         updates["tags"] = normalize_tags(updates["tags"])
@@ -1240,7 +1375,7 @@ async def ingest(payload: IngestRequest, request: Request) -> IngestResponse:
     except RuntimeError as exc:
         log_event(logging.ERROR, "ingest_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="ingest_not_configured")
-    org_id = resolve_org_id(supabase, request, payload.org_id)
+    org_id, _ = resolve_org_context(supabase, request, payload.org_id)
     return run_ingest(
         supabase,
         provider,

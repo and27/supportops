@@ -1,6 +1,7 @@
 fastapi
 pydantic
 python-dotenv
+PyJWT
 requests
 supabase
 uvicorn[standard]
