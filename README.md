@@ -70,6 +70,11 @@ Use `http://localhost:3000/login` to sign in when auth is enabled.
 2) Open `http://localhost:3000/runs` and verify the summary cards populate.
 3) In agent logs, confirm `chat_response` includes `latency_ms` and `retrieval_source`.
 
+### 3c) Decision guardrail behavior
+
+- The agent only returns `action=reply` when citations are present.
+- If no evidence is found, the agent asks for more context (`ask_clarifying`).
+
 ### 4) Run evals
 
 ```bash
