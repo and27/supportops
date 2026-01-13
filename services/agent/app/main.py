@@ -28,6 +28,7 @@ logger = logging.getLogger("supportops.agent")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 _supabase: Client | None = None
+_default_org_id: str | None = None
 
 
 def utc_now() -> str:
@@ -53,9 +54,49 @@ def get_supabase_client() -> Client:
     return _supabase
 
 
+def get_default_org_id(supabase: Client) -> str:
+    global _default_org_id
+    if _default_org_id:
+        return _default_org_id
+    slug = os.getenv("DEFAULT_ORG_SLUG", "default")
+    try:
+        result = (
+            supabase.table("orgs").select("id").eq("slug", slug).limit(1).execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc), org_slug=slug)
+        raise HTTPException(status_code=500, detail="db_error")
+    if not result.data:
+        log_event(logging.ERROR, "default_org_missing", org_slug=slug)
+        raise HTTPException(status_code=500, detail="default_org_missing")
+    _default_org_id = result.data[0]["id"]
+    return _default_org_id
+
+
+def resolve_org_id(
+    supabase: Client,
+    request: Request | None = None,
+    payload_org_id: str | None = None,
+) -> str:
+    org_id = payload_org_id
+    if request is not None:
+        org_id = org_id or request.headers.get("x-org-id")
+        org_id = org_id or request.query_params.get("org_id")
+    if org_id:
+        return org_id
+    return get_default_org_id(supabase)
+
+
+def ensure_write_access(request: Request) -> None:
+    role = request.headers.get("x-org-role", "").lower()
+    if role == "viewer":
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
 class ChatRequest(BaseModel):
     conversation_id: str | None = None
     user_id: str | None = None
+    org_id: str | None = None
     channel: Literal["web"]
     message: str = Field(min_length=1)
     metadata: dict[str, Any] | None = None
@@ -72,6 +113,7 @@ class ChatResponse(BaseModel):
 
 class KBDocument(BaseModel):
     id: str
+    org_id: str | None = None
     title: str
     content: str
     tags: list[str]
@@ -83,6 +125,7 @@ class KBCreate(BaseModel):
     title: str = Field(min_length=1)
     content: str = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
+    org_id: str | None = None
 
 
 class KBUpdate(BaseModel):
@@ -93,6 +136,7 @@ class KBUpdate(BaseModel):
 
 class TicketResponse(BaseModel):
     id: str
+    org_id: str | None = None
     conversation_id: str | None = None
     status: str
     priority: str
@@ -101,8 +145,35 @@ class TicketResponse(BaseModel):
     updated_at: str | None = None
 
 
+class OrgResponse(BaseModel):
+    id: str
+    name: str
+    slug: str
+    created_at: str | None = None
+
+
+class OrgCreate(BaseModel):
+    name: str = Field(min_length=1)
+    slug: str = Field(min_length=1)
+
+
+class MemberResponse(BaseModel):
+    id: str
+    org_id: str
+    user_id: str
+    role: Literal["admin", "agent", "viewer"]
+    created_at: str | None = None
+
+
+class MemberCreate(BaseModel):
+    org_id: str | None = None
+    user_id: str = Field(min_length=1)
+    role: Literal["admin", "agent", "viewer"]
+
+
 class AgentRunResponse(BaseModel):
     id: str
+    org_id: str | None = None
     conversation_id: str | None = None
     action: str
     confidence: float | None = None
@@ -121,6 +192,7 @@ class AgentRunResponse(BaseModel):
 
 class IngestRequest(BaseModel):
     document_id: str
+    org_id: str | None = None
     chunk_size: int = 120
     chunk_overlap: int = 20
     force: bool = False
@@ -268,20 +340,24 @@ def extract_keywords(message: str) -> list[str]:
 
 
 def retrieve_kb_candidates(
-    supabase: Client, message: str, limit: int = 3
+    supabase: Client, message: str, org_id: str | None, limit: int = 3
 ) -> list[dict[str, Any]]:
     query = message.strip().replace(",", " ")
     if not query:
         return []
+
+    def kb_query():
+        base = supabase.table("kb_documents").select("*")
+        if org_id:
+            base = base.eq("org_id", org_id)
+        return base
 
     tags = extract_hash_tags(query)
     try:
         if tags:
             tag_value = tags[0]
             tagged = (
-                supabase.table("kb_documents")
-                .select("*")
-                .contains("tags", [tag_value])
+                kb_query().contains("tags", [tag_value])
                 .limit(limit)
                 .execute()
             )
@@ -289,6 +365,7 @@ def retrieve_kb_candidates(
                 logging.INFO,
                 "kb_tag_lookup",
                 tag=tag_value,
+                org_id=org_id,
                 match_count=len(tagged.data or []),
             )
             if tagged.data:
@@ -301,18 +378,14 @@ def retrieve_kb_candidates(
                 or_parts.append(f"title.ilike.%{keyword}%")
                 or_parts.append(f"content.ilike.%{keyword}%")
             text = (
-                supabase.table("kb_documents")
-                .select("*")
-                .or_(",".join(or_parts))
+                kb_query().or_(",".join(or_parts))
                 .limit(limit)
                 .execute()
             )
             return text.data or []
 
         text = (
-            supabase.table("kb_documents")
-            .select("*")
-            .or_(f"title.ilike.%{query}%,content.ilike.%{query}%")
+            kb_query().or_(f"title.ilike.%{query}%,content.ilike.%{query}%")
             .limit(limit)
             .execute()
         )
@@ -350,7 +423,11 @@ def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, str
 
 
 def retrieve_kb_vector_matches(
-    supabase: Client, message: str, limit: int = 3, min_similarity: float = 0.2
+    supabase: Client,
+    message: str,
+    org_id: str | None,
+    limit: int = 3,
+    min_similarity: float = 0.2,
 ) -> tuple[list[dict[str, Any]], float | None]:
     enabled = os.getenv("VECTOR_SEARCH_ENABLED", "false").lower() == "true"
     if not enabled:
@@ -371,6 +448,7 @@ def retrieve_kb_vector_matches(
                     "query_embedding": embedding,
                     "match_count": limit,
                     "min_similarity": min_similarity,
+                    "p_org_id": org_id,
                 },
             )
             .execute()
@@ -391,13 +469,17 @@ def retrieve_kb_vector_matches(
 
 
 def retrieve_kb_reply(
-    supabase: Client, message: str
+    supabase: Client, message: str, org_id: str | None
 ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
     limit = int(os.getenv("VECTOR_MATCH_COUNT", "3"))
     min_similarity = float(os.getenv("VECTOR_MIN_SIMILARITY", "0.2"))
 
     vector_matches, top_similarity = retrieve_kb_vector_matches(
-        supabase, message, limit=limit, min_similarity=min_similarity
+        supabase,
+        message,
+        org_id,
+        limit=limit,
+        min_similarity=min_similarity,
     )
     if vector_matches:
         reply, citations = build_kb_chunk_reply(vector_matches[0])
@@ -408,7 +490,7 @@ def retrieve_kb_reply(
             {"retrieval_source": "vector", "top_similarity": top_similarity},
         )
 
-    doc_matches = retrieve_kb_candidates(supabase, message)
+    doc_matches = retrieve_kb_candidates(supabase, message, org_id)
     if doc_matches:
         reply, citations = build_kb_reply(doc_matches[0])
         return reply, citations, 0.85, {"retrieval_source": "document"}
@@ -465,6 +547,7 @@ def run_ingest(
     supabase: Client,
     provider: EmbeddingProvider,
     document_id: str,
+    org_id: str | None,
     chunk_size: int,
     chunk_overlap: int,
     force: bool,
@@ -479,13 +562,10 @@ def run_ingest(
     )
 
     try:
-        doc_result = (
-            supabase.table("kb_documents")
-            .select("*")
-            .eq("id", document_id)
-            .limit(1)
-            .execute()
-        )
+        query = supabase.table("kb_documents").select("*").eq("id", document_id)
+        if org_id:
+            query = query.eq("org_id", org_id)
+        doc_result = query.limit(1).execute()
     except Exception as exc:
         log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
@@ -494,6 +574,10 @@ def run_ingest(
         raise HTTPException(status_code=404, detail="kb_not_found")
 
     document = doc_result.data[0]
+    doc_org_id = document.get("org_id")
+    if not doc_org_id:
+        log_event(logging.ERROR, "kb_missing_org", document_id=document_id)
+        raise HTTPException(status_code=500, detail="kb_missing_org")
     chunks = chunk_text(document.get("content", ""), chunk_size, chunk_overlap)
     if not chunks:
         raise HTTPException(status_code=400, detail="kb_content_empty")
@@ -560,6 +644,7 @@ def run_ingest(
             rows.append(
                 {
                     "document_id": document_id,
+                    "org_id": doc_org_id,
                     "chunk_index": unique_map[chash],
                     "content": chunk,
                     "chunk_hash": chash,
@@ -625,6 +710,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    org_id = resolve_org_id(supabase, request, payload.org_id)
     conversation_id = payload.conversation_id or str(uuid.uuid4())
     client_host = request.client.host if request.client else "unknown"
 
@@ -633,6 +719,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         "chat_request",
         conversation_id=conversation_id,
         user_id=payload.user_id,
+        org_id=org_id,
         channel=payload.channel,
         client_ip=client_host,
     )
@@ -642,6 +729,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             supabase.table("conversations").insert(
                 {
                     "id": conversation_id,
+                    "org_id": org_id,
                     "user_id": payload.user_id,
                     "channel": payload.channel,
                     "metadata": payload.metadata,
@@ -665,7 +753,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             reply, action, confidence = precheck
             run_metadata["precheck_action"] = action
         else:
-            kb_reply = retrieve_kb_reply(supabase, payload.message)
+            kb_reply = retrieve_kb_reply(supabase, payload.message, org_id)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
                 action = "reply"
@@ -675,6 +763,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
                 {
+                    "org_id": org_id,
                     "conversation_id": conversation_id,
                     "subject": payload.message[:160],
                 }
@@ -699,6 +788,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             "channel": payload.channel,
             "conversation_id": conversation_id,
             "user_id": payload.user_id,
+            "org_id": org_id,
         }
         run_output = {
             "reply": reply,
@@ -710,6 +800,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         try:
             supabase.table("agent_runs").insert(
                 {
+                    "org_id": org_id,
                     "conversation_id": conversation_id,
                     "action": action,
                     "confidence": confidence,
@@ -756,8 +847,8 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     )
 
 
-@app.get("/v1/tickets/{ticket_id}", response_model=TicketResponse)
-async def get_ticket(ticket_id: str) -> TicketResponse:
+@app.get("/v1/orgs", response_model=list[OrgResponse])
+async def list_orgs() -> list[OrgResponse]:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
@@ -766,7 +857,122 @@ async def get_ticket(ticket_id: str) -> TicketResponse:
 
     try:
         result = (
-            supabase.table("tickets").select("*").eq("id", ticket_id).limit(1).execute()
+            supabase.table("orgs").select("*").order("created_at", desc=True).execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    return [OrgResponse(**org) for org in (result.data or [])]
+
+
+@app.post("/v1/orgs", response_model=OrgResponse, status_code=201)
+async def create_org(payload: OrgCreate, request: Request) -> OrgResponse:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    ensure_write_access(request)
+    data = payload.model_dump()
+    data["slug"] = data["slug"].strip().lower()
+    try:
+        result = supabase.table("orgs").insert(data).execute()
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=500, detail="org_create_failed")
+    return OrgResponse(**result.data[0])
+
+
+@app.get("/v1/orgs/{org_id}", response_model=OrgResponse)
+async def get_org(org_id: str) -> OrgResponse:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    try:
+        result = supabase.table("orgs").select("*").eq("id", org_id).limit(1).execute()
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", org_id=org_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="org_not_found")
+
+    return OrgResponse(**result.data[0])
+
+
+@app.get("/v1/members", response_model=list[MemberResponse])
+async def list_members(request: Request, org_id: str | None = None) -> list[MemberResponse]:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    resolved_org_id = resolve_org_id(supabase, request, org_id)
+    try:
+        result = (
+            supabase.table("members")
+            .select("*")
+            .eq("org_id", resolved_org_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    return [MemberResponse(**member) for member in (result.data or [])]
+
+
+@app.post("/v1/members", response_model=MemberResponse, status_code=201)
+async def create_member(payload: MemberCreate, request: Request) -> MemberResponse:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    ensure_write_access(request)
+    org_id = resolve_org_id(supabase, request, payload.org_id)
+    data = payload.model_dump()
+    data["org_id"] = org_id
+    try:
+        result = supabase.table("members").insert(data).execute()
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not result.data:
+        raise HTTPException(status_code=500, detail="member_create_failed")
+
+    return MemberResponse(**result.data[0])
+
+
+@app.get("/v1/tickets/{ticket_id}", response_model=TicketResponse)
+async def get_ticket(ticket_id: str, request: Request) -> TicketResponse:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    org_id = resolve_org_id(supabase, request)
+    try:
+        result = (
+            supabase.table("tickets")
+            .select("*")
+            .eq("id", ticket_id)
+            .eq("org_id", org_id)
+            .limit(1)
+            .execute()
         )
     except Exception as exc:
         log_event(logging.ERROR, "db_error", ticket_id=ticket_id, error=str(exc))
@@ -780,18 +986,20 @@ async def get_ticket(ticket_id: str) -> TicketResponse:
 
 
 @app.get("/v1/tickets", response_model=list[TicketResponse])
-async def list_tickets(limit: int = 50) -> list[TicketResponse]:
+async def list_tickets(request: Request, limit: int = 50) -> list[TicketResponse]:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    org_id = resolve_org_id(supabase, request)
     safe_limit = max(1, min(limit, 100))
     try:
         result = (
             supabase.table("tickets")
             .select("*")
+            .eq("org_id", org_id)
             .order("created_at", desc=True)
             .limit(safe_limit)
             .execute()
@@ -804,18 +1012,24 @@ async def list_tickets(limit: int = 50) -> list[TicketResponse]:
 
 
 @app.get("/v1/runs", response_model=list[AgentRunResponse])
-async def list_runs(limit: int = 50, conversation_id: str | None = None) -> list[AgentRunResponse]:
+async def list_runs(
+    request: Request,
+    limit: int = 50,
+    conversation_id: str | None = None,
+) -> list[AgentRunResponse]:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    org_id = resolve_org_id(supabase, request)
     safe_limit = max(1, min(limit, 100))
     try:
         query = (
             supabase.table("agent_runs")
             .select("*")
+            .eq("org_id", org_id)
             .order("created_at", desc=True)
             .limit(safe_limit)
         )
@@ -830,16 +1044,22 @@ async def list_runs(limit: int = 50, conversation_id: str | None = None) -> list
 
 
 @app.get("/v1/runs/{run_id}", response_model=AgentRunResponse)
-async def get_run(run_id: str) -> AgentRunResponse:
+async def get_run(run_id: str, request: Request) -> AgentRunResponse:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    org_id = resolve_org_id(supabase, request)
     try:
         result = (
-            supabase.table("agent_runs").select("*").eq("id", run_id).limit(1).execute()
+            supabase.table("agent_runs")
+            .select("*")
+            .eq("id", run_id)
+            .eq("org_id", org_id)
+            .limit(1)
+            .execute()
         )
     except Exception as exc:
         log_event(logging.ERROR, "db_error", run_id=run_id, error=str(exc))
@@ -852,17 +1072,19 @@ async def get_run(run_id: str) -> AgentRunResponse:
 
 
 @app.get("/v1/kb", response_model=list[KBDocument])
-async def list_kb() -> list[KBDocument]:
+async def list_kb(request: Request) -> list[KBDocument]:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    org_id = resolve_org_id(supabase, request)
     try:
         result = (
             supabase.table("kb_documents")
             .select("*")
+            .eq("org_id", org_id)
             .order("created_at", desc=True)
             .execute()
         )
@@ -874,15 +1096,18 @@ async def list_kb() -> list[KBDocument]:
 
 
 @app.post("/v1/kb", response_model=KBDocument, status_code=201)
-async def create_kb(payload: KBCreate) -> KBDocument:
+async def create_kb(payload: KBCreate, request: Request) -> KBDocument:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    ensure_write_access(request)
+    org_id = resolve_org_id(supabase, request, payload.org_id)
     data = payload.model_dump()
     data["tags"] = normalize_tags(data.get("tags") or [])
+    data["org_id"] = org_id
 
     try:
         result = supabase.table("kb_documents").insert(data).execute()
@@ -903,6 +1128,7 @@ async def create_kb(payload: KBCreate) -> KBDocument:
                 supabase,
                 provider,
                 doc["id"],
+                doc.get("org_id"),
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 force=False,
@@ -921,16 +1147,22 @@ async def create_kb(payload: KBCreate) -> KBDocument:
 
 
 @app.get("/v1/kb/{doc_id}", response_model=KBDocument)
-async def get_kb(doc_id: str) -> KBDocument:
+async def get_kb(doc_id: str, request: Request) -> KBDocument:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    org_id = resolve_org_id(supabase, request)
     try:
         result = (
-            supabase.table("kb_documents").select("*").eq("id", doc_id).limit(1).execute()
+            supabase.table("kb_documents")
+            .select("*")
+            .eq("id", doc_id)
+            .eq("org_id", org_id)
+            .limit(1)
+            .execute()
         )
     except Exception as exc:
         log_event(logging.ERROR, "db_error", doc_id=doc_id, error=str(exc))
@@ -943,13 +1175,15 @@ async def get_kb(doc_id: str) -> KBDocument:
 
 
 @app.patch("/v1/kb/{doc_id}", response_model=KBDocument)
-async def update_kb(doc_id: str, payload: KBUpdate) -> KBDocument:
+async def update_kb(doc_id: str, payload: KBUpdate, request: Request) -> KBDocument:
     try:
         supabase = get_supabase_client()
     except RuntimeError as exc:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    ensure_write_access(request)
+    org_id = resolve_org_id(supabase, request)
     updates = payload.model_dump(exclude_unset=True)
     if "tags" in updates and updates["tags"] is not None:
         updates["tags"] = normalize_tags(updates["tags"])
@@ -960,6 +1194,7 @@ async def update_kb(doc_id: str, payload: KBUpdate) -> KBDocument:
             supabase.table("kb_documents")
             .update(updates)
             .eq("id", doc_id)
+            .eq("org_id", org_id)
             .execute()
         )
     except Exception as exc:
@@ -979,6 +1214,7 @@ async def update_kb(doc_id: str, payload: KBUpdate) -> KBDocument:
                 supabase,
                 provider,
                 doc["id"],
+                doc.get("org_id"),
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 force=False,
@@ -997,17 +1233,19 @@ async def update_kb(doc_id: str, payload: KBUpdate) -> KBDocument:
 
 
 @app.post("/v1/ingest", response_model=IngestResponse)
-async def ingest(payload: IngestRequest) -> IngestResponse:
+async def ingest(payload: IngestRequest, request: Request) -> IngestResponse:
     try:
         supabase = get_supabase_client()
         provider = get_embedding_provider()
     except RuntimeError as exc:
         log_event(logging.ERROR, "ingest_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="ingest_not_configured")
+    org_id = resolve_org_id(supabase, request, payload.org_id)
     return run_ingest(
         supabase,
         provider,
         payload.document_id,
+        org_id,
         chunk_size=payload.chunk_size,
         chunk_overlap=payload.chunk_overlap,
         force=payload.force,
