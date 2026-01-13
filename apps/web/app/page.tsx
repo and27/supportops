@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { readOrgIdCookie } from "../lib/org";
 
 type ChatMessage = {
@@ -13,6 +13,19 @@ type ChatMessage = {
   citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
 };
 
+type ConversationSummary = {
+  id: string;
+  created_at?: string | null;
+};
+
+type ConversationMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  metadata?: { citations?: ChatMessage["citations"] } | null;
+  created_at?: string | null;
+};
+
 const initialMessages: ChatMessage[] = [
   {
     role: "assistant",
@@ -20,17 +33,119 @@ const initialMessages: ChatMessage[] = [
   },
 ];
 
+const conversationStorageKey = "supportops_conversation_id";
+
 export default function Home() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
   const statusLabel = useMemo(
     () => (conversationId ? "Active conversation" : "New conversation"),
     [conversationId]
   );
+
+  const formatConversationId = (value: string) => value.slice(0, 8);
+
+  const formatTimestamp = (value?: string | null) => {
+    if (!value) {
+      return "Unknown";
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+    return parsed.toLocaleString();
+  };
+
+  const loadConversations = async () => {
+    setIsLoadingConversations(true);
+    try {
+      const orgId = readOrgIdCookie();
+      const headers: Record<string, string> = {};
+      if (orgId) {
+        headers["X-Org-Id"] = orgId;
+      }
+      const response = await fetch("/api/conversations", {
+        cache: "no-store",
+        headers,
+      });
+      if (!response.ok) {
+        throw new Error("Failed to load conversations");
+      }
+      const data = (await response.json()) as ConversationSummary[];
+      setConversations(data);
+      return data;
+    } catch (err) {
+      setConversations([]);
+      return [];
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  };
+
+  const loadConversationMessages = async (id: string) => {
+    setIsLoadingMessages(true);
+    try {
+      const orgId = readOrgIdCookie();
+      const headers: Record<string, string> = {};
+      if (orgId) {
+        headers["X-Org-Id"] = orgId;
+      }
+      const response = await fetch(`/api/conversations/${id}/messages`, {
+        cache: "no-store",
+        headers,
+      });
+      if (!response.ok) {
+        throw new Error("Failed to load messages");
+      }
+      const data = (await response.json()) as ConversationMessage[];
+      const hydrated = data.flatMap((message) => {
+        if (message.role !== "user" && message.role !== "assistant") {
+          return [];
+        }
+        const citations = message.metadata?.citations ?? null;
+        return [
+          {
+            role: message.role,
+            content: message.content,
+            citations,
+          },
+        ];
+      });
+      setMessages(hydrated.length ? hydrated : initialMessages);
+      setConversationId(id);
+      window.localStorage.setItem(conversationStorageKey, id);
+    } catch (err) {
+      setError("Unable to load conversation history.");
+    } finally {
+      setIsLoadingMessages(false);
+    }
+  };
+
+  useEffect(() => {
+    const init = async () => {
+      const storedId =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(conversationStorageKey)
+          : null;
+      const loaded = await loadConversations();
+      if (storedId) {
+        await loadConversationMessages(storedId);
+        return;
+      }
+      if (loaded[0]?.id) {
+        await loadConversationMessages(loaded[0].id);
+      }
+    };
+
+    init();
+  }, []);
 
   const startNewConversation = () => {
     if (isSending) {
@@ -40,6 +155,9 @@ export default function Home() {
     setMessages(initialMessages);
     setInput("");
     setError(null);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(conversationStorageKey);
+    }
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -87,6 +205,12 @@ export default function Home() {
       };
 
       setConversationId(data.conversation_id);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          conversationStorageKey,
+          data.conversation_id
+        );
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -98,6 +222,7 @@ export default function Home() {
           citations: data.citations ?? null,
         },
       ]);
+      await loadConversations();
     } catch (err) {
       setError("Agent is unavailable. Please try again.");
     } finally {
@@ -234,33 +359,76 @@ export default function Home() {
             </form>
           </div>
 
-          <aside className="panel rounded-3xl p-6 md:p-8 fade-up">
-            <h2 className="text-lg font-semibold">Runtime signals</h2>
-            <p className="mt-2 text-sm text-ink/70">
-              Every reply includes the action and confidence to keep
-              agent logic transparent.
-            </p>
-
-            <div className="mt-6 space-y-4 text-sm text-ink/70">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
-                  Agent actions
-                </p>
-                <ul className="mt-2 space-y-2">
-                  <li>reply: grounded response from KB</li>
-                  <li>ask_clarifying: request missing fields</li>
-                  <li>create_ticket: escalate into workflow</li>
-                </ul>
+          <aside className="flex flex-col gap-6">
+            <div className="panel rounded-3xl p-6 md:p-8 fade-up">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Recent conversations</h2>
+                <button
+                  type="button"
+                  onClick={loadConversations}
+                  className="text-xs uppercase tracking-[0.2em] text-ink/50"
+                  disabled={isLoadingConversations}
+                >
+                  {isLoadingConversations ? "Loading..." : "Refresh"}
+                </button>
               </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
-                  What ships next
-                </p>
-                <ul className="mt-2 space-y-2">
-                  <li>KB management dashboard</li>
-                  <li>Evidence citations per reply</li>
-                  <li>Eval suite with regression cases</li>
-                </ul>
+              <div className="mt-4 space-y-3 text-sm text-ink/70">
+                {isLoadingMessages && (
+                  <p className="text-xs text-ink/50">Loading conversation...</p>
+                )}
+                {!isLoadingConversations && conversations.length === 0 && (
+                  <p>No conversations yet.</p>
+                )}
+                {conversations.map((conversation) => (
+                  <button
+                    key={conversation.id}
+                    type="button"
+                    onClick={() => loadConversationMessages(conversation.id)}
+                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                      conversationId === conversation.id
+                        ? "border-ink bg-white"
+                        : "border-line bg-white/70 hover:border-ink/40"
+                    }`}
+                  >
+                    <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
+                      {formatConversationId(conversation.id)}
+                    </p>
+                    <p className="mt-2 text-xs text-ink/50">
+                      {formatTimestamp(conversation.created_at)}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="panel rounded-3xl p-6 md:p-8 fade-up">
+              <h2 className="text-lg font-semibold">Runtime signals</h2>
+              <p className="mt-2 text-sm text-ink/70">
+                Every reply includes the action and confidence to keep
+                agent logic transparent.
+              </p>
+
+              <div className="mt-6 space-y-4 text-sm text-ink/70">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
+                    Agent actions
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    <li>reply: grounded response from KB</li>
+                    <li>ask_clarifying: request missing fields</li>
+                    <li>create_ticket: escalate into workflow</li>
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
+                    What ships next
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    <li>KB management dashboard</li>
+                    <li>Evidence citations per reply</li>
+                    <li>Eval suite with regression cases</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </aside>
