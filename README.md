@@ -35,6 +35,9 @@ pip install -r requirements.txt
 
 $env:SUPABASE_URL="https://your-project.supabase.co"
 $env:SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
+$env:AUTH_ENABLED="false"
+$env:SUPABASE_JWT_SECRET="your-legacy-jwt-secret-if-using-hs256"
+$env:SUPABASE_JWKS_URL="https://your-project.supabase.co/auth/v1/.well-known/jwks.json"
 
 uvicorn app.main:app --reload --port 8000
 ```
@@ -44,11 +47,22 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 pnpm install
 $env:AGENT_API_BASE_URL="http://localhost:8000"
+$env:SUPABASE_URL="https://your-project.supabase.co"
+$env:SUPABASE_ANON_KEY="your-anon-key"
 pnpm dev:web
 ```
 
 Open `http://localhost:3000` for chat, `http://localhost:3000/kb` for the KB
 admin screen, and `http://localhost:3000/runs` for recent agent runs.
+Use `http://localhost:3000/login` to sign in when auth is enabled.
+
+### 3a) Auth (optional)
+
+- Create a user in Supabase Auth (email + password).
+- Set `AUTH_ENABLED=true` in `services/agent`.
+- For modern Supabase projects (ECC/RS256), set `SUPABASE_JWKS_URL`.
+- Only set `SUPABASE_JWT_SECRET` if you are on legacy HS256.
+- Set `SUPABASE_URL` + `SUPABASE_ANON_KEY` for the web app.
 
 ### 4) Run evals
 
