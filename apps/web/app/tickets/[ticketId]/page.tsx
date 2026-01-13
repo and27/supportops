@@ -52,8 +52,9 @@ export default async function TicketPage({
   params: Promise<{ ticketId: string }>;
 }) {
   const { ticketId } = await params;
-  const orgId = cookies().get("org_id")?.value;
-  const token = cookies().get("sb_access_token")?.value;
+  const cookieStore = await cookies();
+  const orgId = cookieStore.get("org_id")?.value;
+  const token = cookieStore.get("sb_access_token")?.value;
   const ticket = await loadTicket(ticketId, orgId, token);
 
   if (!ticket) {

@@ -58,8 +58,9 @@ export default async function RunDetailPage({
   params: Promise<{ runId: string }>;
 }) {
   const { runId } = await params;
-  const orgId = cookies().get("org_id")?.value;
-  const token = cookies().get("sb_access_token")?.value;
+  const cookieStore = await cookies();
+  const orgId = cookieStore.get("org_id")?.value;
+  const token = cookieStore.get("sb_access_token")?.value;
   const run = await loadRun(runId, orgId, token);
 
   if (!run) {

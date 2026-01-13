@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import LogoutButton from "../components/LogoutButton";
 import OrgSwitcher from "../components/OrgSwitcher";
@@ -16,23 +16,44 @@ type ChatMessage = {
   citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
 };
 
+const initialMessages: ChatMessage[] = [
+  {
+    role: "assistant",
+    content: "Hi, I am SupportOps. Tell me what is going on and I will look it up.",
+  },
+];
+
 export default function Home() {
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content:
-        "Hi, I am SupportOps. Tell me what is going on and I will look it up.",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasSession, setHasSession] = useState<boolean | null>(null);
 
   const statusLabel = useMemo(
     () => (conversationId ? "Active conversation" : "New conversation"),
     [conversationId]
   );
+
+  useEffect(() => {
+    const hasCookie = (cookieName: string) =>
+      document.cookie
+        .split("; ")
+        .some((cookie) => cookie.startsWith(`${cookieName}=`));
+
+    setHasSession(hasCookie("sb_access_token"));
+  }, []);
+
+  const startNewConversation = () => {
+    if (isSending) {
+      return;
+    }
+    setConversationId(null);
+    setMessages(initialMessages);
+    setInput("");
+    setError(null);
+  };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -117,34 +138,50 @@ export default function Home() {
               the team looped in with deterministic actions.
             </p>
           </div>
-          <div className="flex flex-col items-start gap-3 text-xs uppercase tracking-[0.2em] text-ink/60">
+          <div className="flex w-full max-w-[240px] flex-col items-start gap-4">
             <OrgSwitcher />
-            <LogoutButton />
-            <Link
-              href="/login"
-              className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/kb"
-              className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
-            >
-              Manage KB
-            </Link>
-            <Link
-              href="/tickets"
-              className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
-            >
-              View tickets
-            </Link>
-            <Link
-              href="/runs"
-              className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
-            >
-              View runs
-            </Link>
-            <div className="panel rounded-2xl px-5 py-4">{statusLabel}</div>
+            <div className="panel w-full rounded-3xl px-5 py-4">
+              <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.25em] text-ink/50">
+                <span>Workspace</span>
+                {hasSession === false && (
+                  <Link href="/login" className="transition hover:text-ink">
+                    Sign in
+                  </Link>
+                )}
+                {hasSession === true && (
+                  <LogoutButton className="text-[10px] uppercase tracking-[0.25em] text-ink/50 transition hover:text-ink" />
+                )}
+              </div>
+              <div className="mt-4 space-y-2 text-sm text-ink/70">
+                <Link
+                  href="/kb"
+                  className="flex items-center justify-between rounded-2xl border border-line px-3 py-2 transition hover:border-ink/40 hover:text-ink"
+                >
+                  Manage KB
+                </Link>
+                <Link
+                  href="/tickets"
+                  className="flex items-center justify-between rounded-2xl border border-line px-3 py-2 transition hover:border-ink/40 hover:text-ink"
+                >
+                  View tickets
+                </Link>
+                <Link
+                  href="/runs"
+                  className="flex items-center justify-between rounded-2xl border border-line px-3 py-2 transition hover:border-ink/40 hover:text-ink"
+                >
+                  View runs
+                </Link>
+              </div>
+              <button
+                type="button"
+                onClick={startNewConversation}
+                disabled={isSending}
+                className="mt-4 h-11 w-full rounded-2xl bg-ink text-sm font-medium text-paper transition hover:bg-ink/90 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                New conversation
+              </button>
+              <p className="mt-3 text-[11px] text-ink/50">{statusLabel}</p>
+            </div>
           </div>
         </header>
 
