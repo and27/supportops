@@ -15,7 +15,7 @@ export async function GET(
   {
     params,
   }: {
-    params: { conversationId: string };
+    params: Promise<{ conversationId: string }>;
   }
 ) {
   try {
@@ -29,8 +29,9 @@ export async function GET(
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
+    const { conversationId } = await params;
     const response = await fetch(
-      buildUrl(`/v1/conversations/${params.conversationId}/messages?limit=50`),
+      buildUrl(`/v1/conversations/${conversationId}/messages?limit=50`),
       {
         cache: "no-store",
         headers,
