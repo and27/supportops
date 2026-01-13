@@ -1,8 +1,29 @@
 create extension if not exists "pgcrypto";
 create extension if not exists vector;
 
+create table if not exists orgs (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  slug text not null unique,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists members (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  user_id text not null,
+  role text not null check (role in ('admin', 'agent', 'viewer')),
+  created_at timestamptz not null default now(),
+  unique (org_id, user_id)
+);
+
+insert into orgs (name, slug)
+values ('Default', 'default')
+on conflict (slug) do nothing;
+
 create table if not exists conversations (
   id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
   user_id text,
   channel text not null default 'web',
   metadata jsonb,
@@ -20,6 +41,7 @@ create table if not exists messages (
 
 create table if not exists tickets (
   id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
   conversation_id uuid references conversations(id) on delete set null,
   status text not null default 'open' check (status in ('open', 'waiting_user', 'waiting_team', 'resolved')),
   priority text not null default 'normal' check (priority in ('low', 'normal', 'high')),
@@ -30,6 +52,7 @@ create table if not exists tickets (
 
 create table if not exists kb_documents (
   id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
   title text not null,
   content text not null,
   tags text[] not null default '{}'::text[],
@@ -40,6 +63,7 @@ create table if not exists kb_documents (
 create table if not exists kb_chunks (
   id uuid primary key default gen_random_uuid(),
   document_id uuid not null references kb_documents(id) on delete cascade,
+  org_id uuid not null references orgs(id) on delete cascade,
   chunk_index integer not null,
   content text not null,
   chunk_hash text,
@@ -52,6 +76,7 @@ create table if not exists kb_chunks (
 
 create table if not exists agent_runs (
   id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
   conversation_id uuid references conversations(id) on delete set null,
   message_id uuid references messages(id) on delete set null,
   action text not null check (action in ('reply', 'ask_clarifying', 'create_ticket', 'escalate')),
@@ -72,7 +97,8 @@ create table if not exists agent_runs (
 create or replace function match_kb_chunks(
   query_embedding jsonb,
   match_count int default 5,
-  min_similarity float default 0.2
+  min_similarity float default 0.2,
+  p_org_id uuid default null
 )
 returns table (
   id uuid,
@@ -100,6 +126,7 @@ as $$
   cross join query
   where kc.embedding is not null
     and query.vec is not null
+    and (p_org_id is null or kc.org_id = p_org_id)
     and 1 - (kc.embedding <=> query.vec::vector) >= min_similarity
   order by kc.embedding <=> query.vec::vector
   limit match_count;
@@ -107,8 +134,13 @@ $$;
 
 create index if not exists messages_conversation_created_idx on messages(conversation_id, created_at);
 create index if not exists tickets_conversation_id_idx on tickets(conversation_id);
+create index if not exists kb_documents_org_id_idx on kb_documents(org_id);
 create index if not exists kb_documents_tags_idx on kb_documents using gin (tags);
+create index if not exists kb_chunks_org_id_idx on kb_chunks(org_id);
 create index if not exists kb_chunks_document_id_idx on kb_chunks(document_id);
 create index if not exists kb_chunks_embedding_idx on kb_chunks using ivfflat (embedding vector_cosine_ops) where embedding is not null;
 create unique index if not exists kb_chunks_document_hash_idx on kb_chunks(document_id, chunk_hash) where chunk_hash is not null;
+create index if not exists conversations_org_id_idx on conversations(org_id);
+create index if not exists tickets_org_id_idx on tickets(org_id);
+create index if not exists agent_runs_org_id_idx on agent_runs(org_id);
 create index if not exists agent_runs_conversation_created_idx on agent_runs(conversation_id, created_at);
