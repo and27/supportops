@@ -28,11 +28,13 @@ from .schemas import (
     AgentRunResponse,
     ChatRequest,
     ChatResponse,
+    ConversationResponse,
     IngestRequest,
     IngestResponse,
     KBCreate,
     KBDocument,
     KBUpdate,
+    MessageResponse,
     MemberCreate,
     MemberResponse,
     OrgCreate,
@@ -452,6 +454,83 @@ async def list_tickets(request: Request, limit: int = 50) -> list[TicketResponse
         raise HTTPException(status_code=500, detail="db_error")
 
     return [TicketResponse(**ticket) for ticket in (result.data or [])]
+
+
+@app.get("/v1/conversations", response_model=list[ConversationResponse])
+async def list_conversations(
+    request: Request, limit: int = 20
+) -> list[ConversationResponse]:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    org_id, _ = resolve_org_context(supabase, request)
+    safe_limit = max(1, min(limit, 100))
+    try:
+        result = (
+            supabase.table("conversations")
+            .select("*")
+            .eq("org_id", org_id)
+            .order("created_at", desc=True)
+            .limit(safe_limit)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    return [ConversationResponse(**row) for row in (result.data or [])]
+
+
+@app.get(
+    "/v1/conversations/{conversation_id}/messages",
+    response_model=list[MessageResponse],
+)
+async def list_conversation_messages(
+    conversation_id: str,
+    request: Request,
+    limit: int = 50,
+) -> list[MessageResponse]:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    org_id, _ = resolve_org_context(supabase, request)
+    try:
+        convo = (
+            supabase.table("conversations")
+            .select("id")
+            .eq("id", conversation_id)
+            .eq("org_id", org_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not convo.data:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+
+    safe_limit = max(1, min(limit, 200))
+    try:
+        result = (
+            supabase.table("messages")
+            .select("id,conversation_id,role,content,metadata,created_at")
+            .eq("conversation_id", conversation_id)
+            .order("created_at")
+            .limit(safe_limit)
+            .execute()
+        )
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    return [MessageResponse(**row) for row in (result.data or [])]
 
 
 @app.get("/v1/runs", response_model=list[AgentRunResponse])

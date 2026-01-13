@@ -55,6 +55,23 @@ class TicketResponse(BaseModel):
     updated_at: str | None = None
 
 
+class ConversationResponse(BaseModel):
+    id: str
+    org_id: str | None = None
+    user_id: str | None = None
+    channel: str
+    created_at: str | None = None
+
+
+class MessageResponse(BaseModel):
+    id: str
+    conversation_id: str
+    role: str
+    content: str
+    metadata: dict[str, Any] | None = None
+    created_at: str | None = None
+
+
 class OrgResponse(BaseModel):
     id: str
     name: str
