@@ -49,6 +49,40 @@ export default async function RunsPage() {
   const orgId = cookieStore.get("org_id")?.value;
   const token = cookieStore.get("sb_access_token")?.value;
   const runs = await loadRuns(orgId, token);
+  const totalRuns = runs.length;
+  const actionCounts = runs.reduce<Record<string, number>>((acc, run) => {
+    acc[run.action] = (acc[run.action] ?? 0) + 1;
+    return acc;
+  }, {});
+  const retrievalCounts = runs.reduce<Record<string, number>>((acc, run) => {
+    const source =
+      typeof run.metadata?.retrieval_source === "string"
+        ? run.metadata.retrieval_source
+        : "unknown";
+    acc[source] = (acc[source] ?? 0) + 1;
+    return acc;
+  }, {});
+  const latencyValues = runs
+    .map((run) => run.latency_ms)
+    .filter((value): value is number => typeof value === "number");
+  const averageLatency = latencyValues.length
+    ? Math.round(
+        latencyValues.reduce((sum, value) => sum + value, 0) /
+          latencyValues.length
+      )
+    : null;
+  const escalationCount = runs.filter((run) =>
+    ["create_ticket", "escalate"].includes(run.action)
+  ).length;
+  const escalationRate = totalRuns
+    ? Math.round((escalationCount / totalRuns) * 100)
+    : null;
+  const sortedActions = Object.entries(actionCounts).sort(
+    ([, a], [, b]) => b - a
+  );
+  const sortedRetrieval = Object.entries(retrievalCounts).sort(
+    ([, a], [, b]) => b - a
+  );
 
   return (
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-12">
@@ -70,11 +104,73 @@ export default async function RunsPage() {
         </a>
       </header>
 
+      <section className="grid gap-4 md:grid-cols-3">
+        <div className="panel rounded-3xl p-5">
+          <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
+            Action mix
+          </p>
+          <div className="mt-3 space-y-2 text-sm text-ink/70">
+            {sortedActions.length === 0 && <p>No runs yet.</p>}
+            {sortedActions.map(([action, count]) => (
+              <div key={action} className="flex items-center justify-between">
+                <span className="uppercase tracking-[0.2em] text-ink/50">
+                  {action}
+                </span>
+                <span className="font-medium text-ink">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="panel rounded-3xl p-5">
+          <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
+            Latency + escalation
+          </p>
+          <div className="mt-3 space-y-2 text-sm text-ink/70">
+            <div className="flex items-center justify-between">
+              <span className="uppercase tracking-[0.2em] text-ink/50">
+                Avg latency
+              </span>
+              <span className="font-medium text-ink">
+                {averageLatency !== null ? `${averageLatency}ms` : "n/a"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="uppercase tracking-[0.2em] text-ink/50">
+                Escalation
+              </span>
+              <span className="font-medium text-ink">
+                {escalationRate !== null ? `${escalationRate}%` : "n/a"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs text-ink/50">
+              <span>{totalRuns} total runs</span>
+              <span>{escalationCount} escalated</span>
+            </div>
+          </div>
+        </div>
+        <div className="panel rounded-3xl p-5">
+          <p className="text-xs uppercase tracking-[0.2em] text-ink/50">
+            Retrieval source
+          </p>
+          <div className="mt-3 space-y-2 text-sm text-ink/70">
+            {sortedRetrieval.length === 0 && <p>No runs yet.</p>}
+            {sortedRetrieval.map(([source, count]) => (
+              <div key={source} className="flex items-center justify-between">
+                <span className="uppercase tracking-[0.2em] text-ink/50">
+                  {source}
+                </span>
+                <span className="font-medium text-ink">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className="panel rounded-3xl p-6 md:p-8">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Latest runs</h2>
           <span className="text-xs uppercase tracking-[0.2em] text-ink/50">
-            {runs.length} total
+            {totalRuns} total
           </span>
         </div>
 
