@@ -12,7 +12,8 @@ const buildUrl = (path: string) => {
 
 export async function GET() {
   try {
-    const token = cookies().get("sb_access_token")?.value;
+    const cookieStore = await cookies();
+    const token = cookieStore.get("sb_access_token")?.value;
     const headers: Record<string, string> = {};
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
@@ -34,7 +35,8 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const payload = await request.json();
-    const token = cookies().get("sb_access_token")?.value;
+    const cookieStore = await cookies();
+    const token = cookieStore.get("sb_access_token")?.value;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };

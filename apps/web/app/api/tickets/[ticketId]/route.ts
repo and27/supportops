@@ -17,7 +17,8 @@ export async function GET(
   try {
     const ticketId = encodeURIComponent(params.ticketId);
     const orgId = request.headers.get("x-org-id");
-    const token = cookies().get("sb_access_token")?.value;
+    const cookieStore = await cookies();
+    const token = cookieStore.get("sb_access_token")?.value;
     const headers: Record<string, string> = {};
     if (orgId) {
       headers["X-Org-Id"] = orgId;

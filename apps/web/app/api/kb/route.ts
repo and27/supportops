@@ -13,7 +13,8 @@ const buildUrl = (path: string) => {
 export async function GET(request: Request) {
   try {
     const orgId = request.headers.get("x-org-id");
-    const token = cookies().get("sb_access_token")?.value;
+    const cookieStore = await cookies();
+    const token = cookieStore.get("sb_access_token")?.value;
     const headers: Record<string, string> = {};
     if (orgId) {
       headers["X-Org-Id"] = orgId;
@@ -39,7 +40,8 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json();
     const orgId = request.headers.get("x-org-id");
-    const token = cookies().get("sb_access_token")?.value;
+    const cookieStore = await cookies();
+    const token = cookieStore.get("sb_access_token")?.value;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
