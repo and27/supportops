@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 from time import perf_counter
@@ -11,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .auth_utils import auth_enabled, get_auth_user
+from .context_utils import build_context, load_recent_messages
 from .embeddings import get_embedding_provider
 from .ingest import get_ingest_config, run_ingest
 from .logging_utils import log_event
@@ -100,6 +102,16 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 }
             ).execute()
 
+        context_message_limit = int(os.getenv("CONTEXT_MESSAGE_LIMIT", "6"))
+        context_max_chars = int(os.getenv("CONTEXT_MAX_CHARS", "1200"))
+        prior_messages = []
+        context_text = ""
+        if payload.conversation_id:
+            prior_messages = load_recent_messages(
+                supabase, conversation_id, context_message_limit
+            )
+            context_text = build_context(prior_messages, context_max_chars)
+
         supabase.table("messages").insert(
             {
                 "conversation_id": conversation_id,
@@ -112,20 +124,28 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         citations = None
         run_metadata: dict[str, Any] = {"retrieval_source": "none"}
         guardrail_reason = None
+        decision_message = payload.message
+        if context_text:
+            decision_message = f"{context_text}\nuser: {payload.message}"
+            run_metadata["context_messages"] = len(prior_messages)
+            run_metadata["context_chars"] = len(context_text)
+            run_metadata["context_used"] = True
+        else:
+            run_metadata["context_used"] = False
 
-        precheck = precheck_action(payload.message)
+        precheck = precheck_action(decision_message)
         if precheck:
             reply, action, confidence = precheck
             run_metadata["precheck_action"] = action
             run_metadata["decision_source"] = "precheck"
         else:
-            kb_reply = retrieve_kb_reply(supabase, payload.message, org_id)
+            kb_reply = retrieve_kb_reply(supabase, decision_message, org_id)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
                 action = "reply"
                 run_metadata["decision_source"] = "kb"
             else:
-                reply, action, confidence = decide_response(payload.message)
+                reply, action, confidence = decide_response(decision_message)
                 run_metadata["decision_source"] = "heuristic"
         reply_min_similarity = float(os.getenv("REPLY_MIN_SIMILARITY", "0.35"))
         if action == "reply" and run_metadata.get("retrieval_source") == "vector":
@@ -141,6 +161,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                     "Can you add more context (account, steps, and expected behavior)?"
                 )
                 citations = None
+                run_metadata["decision_source"] = "guardrail"
         if action == "reply" and not citations:
             guardrail_reason = "missing_citations"
             run_metadata["guardrail"] = guardrail_reason
@@ -151,6 +172,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 "Can you add more context (account, steps, and expected behavior)?"
             )
             citations = None
+            run_metadata["decision_source"] = "guardrail"
         ticket_id = None
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
@@ -177,6 +199,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         latency_ms = int((perf_counter() - start_time) * 1000)
         run_input = {
             "message": payload.message,
+            "decision_message": decision_message,
             "channel": payload.channel,
             "conversation_id": conversation_id,
             "user_id": user_id,

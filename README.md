@@ -75,6 +75,7 @@ Use `http://localhost:3000/login` to sign in when auth is enabled.
 - The agent only returns `action=reply` when citations are present.
 - If no evidence is found, the agent asks for more context (`ask_clarifying`).
 - For vector search, replies are blocked when `top_similarity` is below `REPLY_MIN_SIMILARITY`.
+- Recent conversation context is appended (last N messages) to help follow-up questions.
 
 ### 4) Run evals
 
