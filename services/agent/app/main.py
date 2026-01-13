@@ -573,7 +573,7 @@ def retrieve_kb_vector_matches(
     org_id: str | None,
     limit: int = 3,
     min_similarity: float = 0.2,
-) -> tuple[list[dict[str, Any]], float | None]:
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     enabled = os.getenv("VECTOR_SEARCH_ENABLED", "false").lower() == "true"
     if not enabled:
         return [], None
@@ -600,6 +600,11 @@ def retrieve_kb_vector_matches(
         )
         data = result.data or []
         top_similarity = data[0].get("similarity") if data else None
+        meta = {
+            "match_count": len(data),
+            "top_similarity": top_similarity,
+            "min_similarity": min_similarity,
+        }
         log_event(
             logging.INFO,
             "kb_vector_matches",
@@ -607,7 +612,7 @@ def retrieve_kb_vector_matches(
             top_similarity=top_similarity,
             min_similarity=min_similarity,
         )
-        return data, top_similarity
+        return data, meta
     except Exception as exc:
         log_event(logging.ERROR, "kb_vector_search_error", error=str(exc))
         return [], None
@@ -619,7 +624,7 @@ def retrieve_kb_reply(
     limit = int(os.getenv("VECTOR_MATCH_COUNT", "3"))
     min_similarity = float(os.getenv("VECTOR_MIN_SIMILARITY", "0.2"))
 
-    vector_matches, top_similarity = retrieve_kb_vector_matches(
+    vector_matches, vector_meta = retrieve_kb_vector_matches(
         supabase,
         message,
         org_id,
@@ -628,17 +633,25 @@ def retrieve_kb_reply(
     )
     if vector_matches:
         reply, citations = build_kb_chunk_reply(vector_matches[0])
+        run_meta: dict[str, Any] = {"retrieval_source": "vector"}
+        if vector_meta:
+            run_meta.update(vector_meta)
         return (
             reply,
             citations,
             0.9,
-            {"retrieval_source": "vector", "top_similarity": top_similarity},
+            run_meta,
         )
 
     doc_matches = retrieve_kb_candidates(supabase, message, org_id)
     if doc_matches:
         reply, citations = build_kb_reply(doc_matches[0])
-        return reply, citations, 0.85, {"retrieval_source": "document"}
+        return (
+            reply,
+            citations,
+            0.85,
+            {"retrieval_source": "document", "document_match_count": len(doc_matches)},
+        )
 
     return None
 
@@ -898,13 +911,16 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         if precheck:
             reply, action, confidence = precheck
             run_metadata["precheck_action"] = action
+            run_metadata["decision_source"] = "precheck"
         else:
             kb_reply = retrieve_kb_reply(supabase, payload.message, org_id)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
                 action = "reply"
+                run_metadata["decision_source"] = "kb"
             else:
                 reply, action, confidence = decide_response(payload.message)
+                run_metadata["decision_source"] = "heuristic"
         ticket_id = None
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
@@ -981,6 +997,9 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         confidence=confidence,
         ticket_id=ticket_id,
         citations=citations,
+        latency_ms=latency_ms,
+        retrieval_source=run_metadata.get("retrieval_source"),
+        decision_source=run_metadata.get("decision_source"),
     )
 
     return ChatResponse(
