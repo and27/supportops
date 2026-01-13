@@ -64,6 +64,12 @@ Use `http://localhost:3000/login` to sign in when auth is enabled.
 - Only set `SUPABASE_JWT_SECRET` if you are on legacy HS256.
 - Set `SUPABASE_URL` + `SUPABASE_ANON_KEY` for the web app.
 
+### 3b) Observability smoke checks
+
+1) Send a chat message from `http://localhost:3000`.
+2) Open `http://localhost:3000/runs` and verify the summary cards populate.
+3) In agent logs, confirm `chat_response` includes `latency_ms` and `retrieval_source`.
+
 ### 4) Run evals
 
 ```bash
