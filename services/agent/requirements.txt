@@ -2,6 +2,7 @@ fastapi
 pydantic
 python-dotenv
 PyJWT
+cryptography
 requests
 supabase
 uvicorn[standard]

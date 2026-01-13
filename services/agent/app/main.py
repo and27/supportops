@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import requests
 import jwt
-from jwt import InvalidTokenError
+from jwt import InvalidTokenError, PyJWKClient
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
@@ -31,6 +31,8 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 _supabase: Client | None = None
 _default_org_id: str | None = None
+_jwks_client: PyJWKClient | None = None
+_jwks_url: str | None = None
 
 
 def utc_now() -> str:
@@ -60,6 +62,25 @@ def auth_enabled() -> bool:
     return os.getenv("AUTH_ENABLED", "false").lower() == "true"
 
 
+def get_jwks_url() -> str | None:
+    url = os.getenv("SUPABASE_JWKS_URL")
+    if url:
+        return url
+    supabase_url = os.getenv("SUPABASE_URL")
+    if not supabase_url:
+        return None
+    return f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+
+
+def get_jwks_client(url: str) -> PyJWKClient:
+    global _jwks_client, _jwks_url
+    if _jwks_client and _jwks_url == url:
+        return _jwks_client
+    _jwks_client = PyJWKClient(url)
+    _jwks_url = url
+    return _jwks_client
+
+
 def get_auth_user(request: Request) -> str | None:
     if not auth_enabled():
         return None
@@ -70,16 +91,38 @@ def get_auth_user(request: Request) -> str | None:
     if not token:
         raise HTTPException(status_code=401, detail="auth_required")
     secret = os.getenv("SUPABASE_JWT_SECRET")
-    if not secret:
-        raise HTTPException(status_code=500, detail="auth_not_configured")
     try:
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
+        header = jwt.get_unverified_header(token)
     except InvalidTokenError:
+        raise HTTPException(status_code=401, detail="invalid_token")
+    alg = header.get("alg")
+    if not alg:
+        raise HTTPException(status_code=401, detail="invalid_token")
+
+    try:
+        if secret and alg.startswith("HS"):
+            payload = jwt.decode(
+                token,
+                secret,
+                algorithms=[alg],
+                options={"verify_aud": False},
+            )
+        else:
+            jwks_url = get_jwks_url()
+            if not jwks_url:
+                raise HTTPException(status_code=500, detail="auth_not_configured")
+            jwk_client = get_jwks_client(jwks_url)
+            signing_key = jwk_client.get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=[alg],
+                options={"verify_aud": False},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_event(logging.ERROR, "auth_verify_failed", error=str(exc))
         raise HTTPException(status_code=401, detail="invalid_token")
     user_id = payload.get("sub")
     if not user_id:
@@ -958,29 +1001,21 @@ async def list_orgs(request: Request) -> list[OrgResponse]:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    org_ids: list[str] | None = None
+    if auth_enabled():
+        user_id = get_auth_user(request)
+        memberships = load_memberships(supabase, user_id)
+        org_ids = [member.get("org_id") for member in memberships if member.get("org_id")]
+        if not org_ids:
+            return []
+
     try:
-        if auth_enabled():
-            user_id = get_auth_user(request)
-            memberships = load_memberships(supabase, user_id)
-            org_ids = [
-                member.get("org_id") for member in memberships if member.get("org_id")
-            ]
-            if not org_ids:
-                return []
-            result = (
-                supabase.table("orgs")
-                .select("*")
-                .in_("id", org_ids)
-                .order("created_at", desc=True)
-                .execute()
-            )
-        else:
-            result = (
-                supabase.table("orgs")
-                .select("*")
-                .order("created_at", desc=True)
-                .execute()
-            )
+        query = supabase.table("orgs").select("*").order("created_at", desc=True)
+        if org_ids:
+            query = query.in_("id", org_ids)
+        result = query.execute()
+    except HTTPException:
+        raise
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
