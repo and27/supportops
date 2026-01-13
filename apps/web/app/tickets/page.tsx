@@ -1,3 +1,7 @@
+import { cookies } from "next/headers";
+
+import OrgSwitcher from "../../components/OrgSwitcher";
+
 type Ticket = {
   id: string;
   conversation_id: string | null;
@@ -15,10 +19,15 @@ const buildUrl = (path: string) => {
   return `${normalized}${path}`;
 };
 
-async function loadTickets(): Promise<Ticket[]> {
+async function loadTickets(orgId: string | undefined): Promise<Ticket[]> {
   try {
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl("/v1/tickets"), {
       cache: "no-store",
+      headers,
     });
     if (!response.ok) {
       return [];
@@ -30,7 +39,8 @@ async function loadTickets(): Promise<Ticket[]> {
 }
 
 export default async function TicketsPage() {
-  const tickets = await loadTickets();
+  const orgId = cookies().get("org_id")?.value;
+  const tickets = await loadTickets(orgId);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-12">
@@ -45,12 +55,15 @@ export default async function TicketsPage() {
             follow-up.
           </p>
         </div>
-        <a
-          href="/"
-          className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
-        >
-          Back to chat
-        </a>
+        <div className="flex flex-col items-start gap-3">
+          <OrgSwitcher />
+          <a
+            href="/"
+            className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
+          >
+            Back to chat
+          </a>
+        </div>
       </header>
 
       <section className="panel rounded-3xl p-6 md:p-8">

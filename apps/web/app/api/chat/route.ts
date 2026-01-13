@@ -12,9 +12,16 @@ const buildUrl = (path: string) => {
 export async function POST(request: Request) {
   try {
     const payload = await request.json();
+    const orgId = request.headers.get("x-org-id");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl("/v1/chat"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(payload),
       cache: "no-store",
     });

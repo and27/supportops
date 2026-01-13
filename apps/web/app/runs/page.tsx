@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
+
+import OrgSwitcher from "../../components/OrgSwitcher";
 
 type AgentRun = {
   id: string;
@@ -17,10 +20,15 @@ const buildUrl = (path: string) => {
   return `${normalized}${path}`;
 };
 
-async function loadRuns(): Promise<AgentRun[]> {
+async function loadRuns(orgId: string | undefined): Promise<AgentRun[]> {
   try {
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl("/v1/runs?limit=50"), {
       cache: "no-store",
+      headers,
     });
     if (!response.ok) {
       return [];
@@ -32,7 +40,8 @@ async function loadRuns(): Promise<AgentRun[]> {
 }
 
 export default async function RunsPage() {
-  const runs = await loadRuns();
+  const orgId = cookies().get("org_id")?.value;
+  const runs = await loadRuns(orgId);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-12">
@@ -46,12 +55,15 @@ export default async function RunsPage() {
             Recent decisions with latency and retrieval source metadata.
           </p>
         </div>
-        <a
-          href="/"
-          className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
-        >
-          Back to chat
-        </a>
+        <div className="flex flex-col items-start gap-3">
+          <OrgSwitcher />
+          <a
+            href="/"
+            className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
+          >
+            Back to chat
+          </a>
+        </div>
       </header>
 
       <section className="panel rounded-3xl p-6 md:p-8">

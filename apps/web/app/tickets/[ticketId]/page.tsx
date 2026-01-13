@@ -1,3 +1,7 @@
+import { cookies } from "next/headers";
+
+import OrgSwitcher from "../../../components/OrgSwitcher";
+
 type Ticket = {
   id: string;
   conversation_id: string | null;
@@ -15,10 +19,18 @@ const buildUrl = (path: string) => {
   return `${normalized}${path}`;
 };
 
-async function loadTicket(ticketId: string): Promise<Ticket | null> {
+async function loadTicket(
+  ticketId: string,
+  orgId: string | undefined
+): Promise<Ticket | null> {
   try {
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl(`/v1/tickets/${ticketId}`), {
       cache: "no-store",
+      headers,
     });
     if (!response.ok) {
       return null;
@@ -35,7 +47,8 @@ export default async function TicketPage({
   params: Promise<{ ticketId: string }>;
 }) {
   const { ticketId } = await params;
-  const ticket = await loadTicket(ticketId);
+  const orgId = cookies().get("org_id")?.value;
+  const ticket = await loadTicket(ticketId, orgId);
 
   if (!ticket) {
     return (
@@ -62,13 +75,18 @@ export default async function TicketPage({
   return (
     <div className="mx-auto flex min-h-screen max-w-4xl flex-col gap-6 px-6 py-12">
       <header className="panel rounded-3xl p-6 md:p-8">
-        <p className="text-xs uppercase tracking-[0.3em] text-ink/50">
-          SupportOps ticket
-        </p>
-        <h1 className="mt-4 text-3xl font-semibold">{ticket.id}</h1>
-        <p className="mt-2 text-sm text-ink/60">
-          Status: {ticket.status} · Priority: {ticket.priority}
-        </p>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-ink/50">
+              SupportOps ticket
+            </p>
+            <h1 className="mt-4 text-3xl font-semibold">{ticket.id}</h1>
+            <p className="mt-2 text-sm text-ink/60">
+              Status: {ticket.status} ú Priority: {ticket.priority}
+            </p>
+          </div>
+          <OrgSwitcher />
+        </div>
       </header>
 
       <section className="panel rounded-3xl p-6 md:p-8">

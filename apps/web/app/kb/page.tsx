@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import OrgSwitcher from "../../components/OrgSwitcher";
+import { readOrgIdCookie } from "../../lib/org";
+
 type KbDoc = {
   id: string;
   title: string;
@@ -39,7 +42,15 @@ export default function KbPage() {
   const loadDocs = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch("/api/kb", { cache: "no-store" });
+      const orgId = readOrgIdCookie();
+      const headers: Record<string, string> = {};
+      if (orgId) {
+        headers["X-Org-Id"] = orgId;
+      }
+      const response = await fetch("/api/kb", {
+        cache: "no-store",
+        headers,
+      });
       if (!response.ok) {
         throw new Error("Failed to load KB");
       }
@@ -98,11 +109,18 @@ export default function KbPage() {
     }
 
     try {
+      const orgId = readOrgIdCookie();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (orgId) {
+        headers["X-Org-Id"] = orgId;
+      }
       const response = await fetch(
         selectedId ? `/api/kb/${selectedId}` : "/api/kb",
         {
           method: selectedId ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(payload),
         }
       );
@@ -136,12 +154,15 @@ export default function KbPage() {
             to respond with grounded answers.
           </p>
         </div>
-        <Link
-          href="/"
-          className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
-        >
-          Back to chat
-        </Link>
+        <div className="flex flex-col items-start gap-3">
+          <OrgSwitcher />
+          <Link
+            href="/"
+            className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
+          >
+            Back to chat
+          </Link>
+        </div>
       </header>
 
       <section className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">

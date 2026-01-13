@@ -1,3 +1,7 @@
+import { cookies } from "next/headers";
+
+import OrgSwitcher from "../../../components/OrgSwitcher";
+
 type AgentRun = {
   id: string;
   conversation_id: string | null;
@@ -18,10 +22,18 @@ const buildUrl = (path: string) => {
   return `${normalized}${path}`;
 };
 
-async function loadRun(runId: string): Promise<AgentRun | null> {
+async function loadRun(
+  runId: string,
+  orgId: string | undefined
+): Promise<AgentRun | null> {
   try {
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl(`/v1/runs/${runId}`), {
       cache: "no-store",
+      headers,
     });
     if (!response.ok) {
       return null;
@@ -41,7 +53,8 @@ export default async function RunDetailPage({
   params: Promise<{ runId: string }>;
 }) {
   const { runId } = await params;
-  const run = await loadRun(runId);
+  const orgId = cookies().get("org_id")?.value;
+  const run = await loadRun(runId, orgId);
 
   if (!run) {
     return (
@@ -68,16 +81,21 @@ export default async function RunDetailPage({
   return (
     <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-6 py-12">
       <header className="panel rounded-3xl p-6 md:p-8">
-        <p className="text-xs uppercase tracking-[0.3em] text-ink/50">
-          Agent run
-        </p>
-        <h1 className="mt-4 text-2xl font-semibold">{run.id}</h1>
-        <p className="mt-2 text-sm text-ink/60">
-          {run.action} · {run.confidence ?? 0} · {run.latency_ms ?? 0}ms
-        </p>
-        <p className="mt-1 text-xs text-ink/50">
-          Created: {run.created_at ?? "unknown"}
-        </p>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-ink/50">
+              Agent run
+            </p>
+            <h1 className="mt-4 text-2xl font-semibold">{run.id}</h1>
+            <p className="mt-2 text-sm text-ink/60">
+              {run.action} ú {run.confidence ?? 0} ú {run.latency_ms ?? 0}ms
+            </p>
+            <p className="mt-1 text-xs text-ink/50">
+              Created: {run.created_at ?? "unknown"}
+            </p>
+          </div>
+          <OrgSwitcher />
+        </div>
       </header>
 
       <section className="grid gap-6 md:grid-cols-2">

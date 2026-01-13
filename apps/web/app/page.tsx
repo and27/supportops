@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import OrgSwitcher from "../components/OrgSwitcher";
+import { readOrgIdCookie } from "../lib/org";
+
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -43,9 +46,16 @@ export default function Home() {
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
 
     try {
+      const orgId = readOrgIdCookie();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (orgId) {
+        headers["X-Org-Id"] = orgId;
+      }
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           conversation_id: conversationId ?? undefined,
           channel: "web",
@@ -107,6 +117,7 @@ export default function Home() {
             </p>
           </div>
           <div className="flex flex-col items-start gap-3 text-xs uppercase tracking-[0.2em] text-ink/60">
+            <OrgSwitcher />
             <Link
               href="/kb"
               className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"

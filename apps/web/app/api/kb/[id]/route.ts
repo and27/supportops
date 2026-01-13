@@ -10,13 +10,19 @@ const buildUrl = (path: string) => {
 };
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: { id: string } }
 ) {
   try {
     const docId = encodeURIComponent(params.id);
+    const orgId = request.headers.get("x-org-id");
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl(`/v1/kb/${docId}`), {
       cache: "no-store",
+      headers,
     });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
@@ -35,9 +41,16 @@ export async function PATCH(
   try {
     const payload = await request.json();
     const docId = encodeURIComponent(params.id);
+    const orgId = request.headers.get("x-org-id");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl(`/v1/kb/${docId}`), {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(payload),
       cache: "no-store",
     });

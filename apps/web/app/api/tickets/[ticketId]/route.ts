@@ -10,13 +10,19 @@ const buildUrl = (path: string) => {
 };
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: { ticketId: string } }
 ) {
   try {
     const ticketId = encodeURIComponent(params.ticketId);
+    const orgId = request.headers.get("x-org-id");
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
     const response = await fetch(buildUrl(`/v1/tickets/${ticketId}`), {
       cache: "no-store",
+      headers,
     });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
