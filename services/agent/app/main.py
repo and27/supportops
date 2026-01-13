@@ -111,6 +111,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         kb_reply = None
         citations = None
         run_metadata: dict[str, Any] = {"retrieval_source": "none"}
+        guardrail_reason = None
 
         precheck = precheck_action(payload.message)
         if precheck:
@@ -126,6 +127,15 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             else:
                 reply, action, confidence = decide_response(payload.message)
                 run_metadata["decision_source"] = "heuristic"
+        if action == "reply" and not citations:
+            guardrail_reason = "missing_citations"
+            run_metadata["guardrail"] = guardrail_reason
+            run_metadata["guardrail_original_action"] = action
+            action = "ask_clarifying"
+            confidence = min(confidence, 0.4)
+            reply = (
+                "Can you add more context (account, steps, and expected behavior)?"
+            )
         ticket_id = None
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
@@ -205,6 +215,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         latency_ms=latency_ms,
         retrieval_source=run_metadata.get("retrieval_source"),
         decision_source=run_metadata.get("decision_source"),
+        guardrail=guardrail_reason,
     )
 
     return ChatResponse(
