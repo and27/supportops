@@ -119,6 +119,12 @@ export default function Home() {
           <div className="flex flex-col items-start gap-3 text-xs uppercase tracking-[0.2em] text-ink/60">
             <OrgSwitcher />
             <Link
+              href="/login"
+              className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
+            >
+              Sign in
+            </Link>
+            <Link
               href="/kb"
               className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
             >

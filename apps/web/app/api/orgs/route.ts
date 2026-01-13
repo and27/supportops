@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,15 @@ const buildUrl = (path: string) => {
 
 export async function GET() {
   try {
-    const response = await fetch(buildUrl("/v1/orgs"), { cache: "no-store" });
+    const token = cookies().get("sb_access_token")?.value;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const response = await fetch(buildUrl("/v1/orgs"), {
+      cache: "no-store",
+      headers,
+    });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -25,9 +34,16 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const payload = await request.json();
+    const token = cookies().get("sb_access_token")?.value;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
     const response = await fetch(buildUrl("/v1/orgs"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(payload),
       cache: "no-store",
     });

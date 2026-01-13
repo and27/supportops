@@ -21,12 +21,16 @@ const buildUrl = (path: string) => {
 
 async function loadTicket(
   ticketId: string,
-  orgId: string | undefined
+  orgId: string | undefined,
+  token: string | undefined
 ): Promise<Ticket | null> {
   try {
     const headers: Record<string, string> = {};
     if (orgId) {
       headers["X-Org-Id"] = orgId;
+    }
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
     const response = await fetch(buildUrl(`/v1/tickets/${ticketId}`), {
       cache: "no-store",
@@ -48,7 +52,8 @@ export default async function TicketPage({
 }) {
   const { ticketId } = await params;
   const orgId = cookies().get("org_id")?.value;
-  const ticket = await loadTicket(ticketId, orgId);
+  const token = cookies().get("sb_access_token")?.value;
+  const ticket = await loadTicket(ticketId, orgId, token);
 
   if (!ticket) {
     return (
@@ -82,7 +87,7 @@ export default async function TicketPage({
             </p>
             <h1 className="mt-4 text-3xl font-semibold">{ticket.id}</h1>
             <p className="mt-2 text-sm text-ink/60">
-              Status: {ticket.status} ú Priority: {ticket.priority}
+              Status: {ticket.status} | Priority: {ticket.priority}
             </p>
           </div>
           <OrgSwitcher />

@@ -24,12 +24,16 @@ const buildUrl = (path: string) => {
 
 async function loadRun(
   runId: string,
-  orgId: string | undefined
+  orgId: string | undefined,
+  token: string | undefined
 ): Promise<AgentRun | null> {
   try {
     const headers: Record<string, string> = {};
     if (orgId) {
       headers["X-Org-Id"] = orgId;
+    }
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
     const response = await fetch(buildUrl(`/v1/runs/${runId}`), {
       cache: "no-store",
@@ -54,7 +58,8 @@ export default async function RunDetailPage({
 }) {
   const { runId } = await params;
   const orgId = cookies().get("org_id")?.value;
-  const run = await loadRun(runId, orgId);
+  const token = cookies().get("sb_access_token")?.value;
+  const run = await loadRun(runId, orgId, token);
 
   if (!run) {
     return (
@@ -88,7 +93,7 @@ export default async function RunDetailPage({
             </p>
             <h1 className="mt-4 text-2xl font-semibold">{run.id}</h1>
             <p className="mt-2 text-sm text-ink/60">
-              {run.action} ú {run.confidence ?? 0} ú {run.latency_ms ?? 0}ms
+              {run.action} | {run.confidence ?? 0} | {run.latency_ms ?? 0}ms
             </p>
             <p className="mt-1 text-xs text-ink/50">
               Created: {run.created_at ?? "unknown"}

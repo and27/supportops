@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -12,9 +13,13 @@ const buildUrl = (path: string) => {
 export async function GET(request: Request) {
   try {
     const orgId = request.headers.get("x-org-id");
+    const token = cookies().get("sb_access_token")?.value;
     const headers: Record<string, string> = {};
     if (orgId) {
       headers["X-Org-Id"] = orgId;
+    }
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
     const response = await fetch(buildUrl("/v1/kb"), {
       cache: "no-store",
@@ -34,11 +39,15 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json();
     const orgId = request.headers.get("x-org-id");
+    const token = cookies().get("sb_access_token")?.value;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
     if (orgId) {
       headers["X-Org-Id"] = orgId;
+    }
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
     const response = await fetch(buildUrl("/v1/kb"), {
       method: "POST",

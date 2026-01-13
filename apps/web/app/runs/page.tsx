@@ -20,11 +20,17 @@ const buildUrl = (path: string) => {
   return `${normalized}${path}`;
 };
 
-async function loadRuns(orgId: string | undefined): Promise<AgentRun[]> {
+async function loadRuns(
+  orgId: string | undefined,
+  token: string | undefined
+): Promise<AgentRun[]> {
   try {
     const headers: Record<string, string> = {};
     if (orgId) {
       headers["X-Org-Id"] = orgId;
+    }
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
     const response = await fetch(buildUrl("/v1/runs?limit=50"), {
       cache: "no-store",
@@ -41,7 +47,8 @@ async function loadRuns(orgId: string | undefined): Promise<AgentRun[]> {
 
 export default async function RunsPage() {
   const orgId = cookies().get("org_id")?.value;
-  const runs = await loadRuns(orgId);
+  const token = cookies().get("sb_access_token")?.value;
+  const runs = await loadRuns(orgId, token);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-12">
