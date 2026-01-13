@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Mono, Sora } from "next/font/google";
 import "./globals.css";
+import NavBar from "../components/NavBar";
 
 const sora = Sora({
   variable: "--font-sora",
@@ -27,6 +28,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${sora.variable} ${dmMono.variable} antialiased`}>
+        <NavBar />
         {children}
       </body>
     </html>

@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 
-import LogoutButton from "../../components/LogoutButton";
-import OrgSwitcher from "../../components/OrgSwitcher";
 
 type AgentRun = {
   id: string;
@@ -64,16 +62,12 @@ export default async function RunsPage() {
             Recent decisions with latency and retrieval source metadata.
           </p>
         </div>
-        <div className="flex flex-col items-start gap-3">
-          <OrgSwitcher />
-          <LogoutButton />
-          <a
-            href="/"
-            className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
-          >
-            Back to chat
-          </a>
-        </div>
+        <a
+          href="/"
+          className="inline-flex h-11 items-center justify-center rounded-2xl border border-line px-5 text-sm font-medium text-ink"
+        >
+          Back to chat
+        </a>
       </header>
 
       <section className="panel rounded-3xl p-6 md:p-8">

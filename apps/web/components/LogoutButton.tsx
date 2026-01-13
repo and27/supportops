@@ -2,7 +2,15 @@
 
 import { useState } from "react";
 
-export default function LogoutButton() {
+type LogoutButtonProps = {
+  className?: string;
+  label?: string;
+};
+
+export default function LogoutButton({
+  className,
+  label,
+}: LogoutButtonProps) {
   const [isSigningOut, setIsSigningOut] = useState(false);
 
   const handleLogout = async () => {
@@ -17,14 +25,18 @@ export default function LogoutButton() {
     }
   };
 
+  const defaultClasses =
+    "panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink";
+  const buttonClassName = className ?? defaultClasses;
+
   return (
     <button
       type="button"
       onClick={handleLogout}
-      className="panel rounded-2xl px-5 py-3 text-ink/70 transition hover:text-ink"
+      className={`${buttonClassName} disabled:cursor-not-allowed disabled:opacity-70`}
       disabled={isSigningOut}
     >
-      {isSigningOut ? "Signing out..." : "Sign out"}
+      {isSigningOut ? "Signing out..." : label ?? "Sign out"}
     </button>
   );
 }

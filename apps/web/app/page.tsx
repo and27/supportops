@@ -1,10 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-
-import LogoutButton from "../components/LogoutButton";
-import OrgSwitcher from "../components/OrgSwitcher";
+import { useMemo, useState } from "react";
 import { readOrgIdCookie } from "../lib/org";
 
 type ChatMessage = {
@@ -29,21 +26,11 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasSession, setHasSession] = useState<boolean | null>(null);
 
   const statusLabel = useMemo(
     () => (conversationId ? "Active conversation" : "New conversation"),
     [conversationId]
   );
-
-  useEffect(() => {
-    const hasCookie = (cookieName: string) =>
-      document.cookie
-        .split("; ")
-        .some((cookie) => cookie.startsWith(`${cookieName}=`));
-
-    setHasSession(hasCookie("sb_access_token"));
-  }, []);
 
   const startNewConversation = () => {
     if (isSending) {
@@ -125,78 +112,41 @@ export default function Home() {
       <div className="pointer-events-none absolute bottom-24 left-10 h-52 w-52 rounded-full bg-accent-2/30 blur-[90px] float-fast" />
 
       <main className="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-10 px-6 py-12">
-        <header className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between fade-up">
-          <div className="space-y-3">
-            <p className="text-xs uppercase tracking-[0.3em] text-ink/60">
-              SupportOps
-            </p>
-            <h1 className="text-4xl font-semibold leading-tight md:text-5xl">
-              Agent-driven support desk with an audit trail.
-            </h1>
-            <p className="max-w-2xl text-base text-ink/70">
-              Chat with the runtime, capture every step in Supabase, and keep
-              the team looped in with deterministic actions.
-            </p>
-          </div>
-          <div className="flex w-full max-w-[240px] flex-col items-start gap-4">
-            <OrgSwitcher />
-            <div className="panel w-full rounded-3xl px-5 py-4">
-              <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.25em] text-ink/50">
-                <span>Workspace</span>
-                {hasSession === false && (
-                  <Link href="/login" className="transition hover:text-ink">
-                    Sign in
-                  </Link>
-                )}
-                {hasSession === true && (
-                  <LogoutButton className="text-[10px] uppercase tracking-[0.25em] text-ink/50 transition hover:text-ink" />
-                )}
-              </div>
-              <div className="mt-4 space-y-2 text-sm text-ink/70">
-                <Link
-                  href="/kb"
-                  className="flex items-center justify-between rounded-2xl border border-line px-3 py-2 transition hover:border-ink/40 hover:text-ink"
-                >
-                  Manage KB
-                </Link>
-                <Link
-                  href="/tickets"
-                  className="flex items-center justify-between rounded-2xl border border-line px-3 py-2 transition hover:border-ink/40 hover:text-ink"
-                >
-                  View tickets
-                </Link>
-                <Link
-                  href="/runs"
-                  className="flex items-center justify-between rounded-2xl border border-line px-3 py-2 transition hover:border-ink/40 hover:text-ink"
-                >
-                  View runs
-                </Link>
-              </div>
-              <button
-                type="button"
-                onClick={startNewConversation}
-                disabled={isSending}
-                className="mt-4 h-11 w-full rounded-2xl bg-ink text-sm font-medium text-paper transition hover:bg-ink/90 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                New conversation
-              </button>
-              <p className="mt-3 text-[11px] text-ink/50">{statusLabel}</p>
-            </div>
-          </div>
+        <header className="space-y-3 fade-up">
+          <h1 className="text-4xl font-semibold leading-tight md:text-5xl">
+            Agent-driven support desk with an audit trail.
+          </h1>
+          <p className="max-w-2xl text-base text-ink/70">
+            Chat with the runtime, capture every step in Supabase, and keep
+            the team looped in with deterministic actions.
+          </p>
         </header>
 
         <section className="grid gap-6 lg:grid-cols-[1.6fr_0.8fr]">
           <div className="panel rounded-3xl p-6 md:p-8 fade-up">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium">Live chat</p>
                 <p className="text-xs text-ink/60">
                   Messages are stored in Supabase as you send them.
                 </p>
               </div>
-              <span className="text-xs font-mono uppercase tracking-[0.25em] text-ink/50">
-                v0 runtime
-              </span>
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <button
+                  type="button"
+                  onClick={startNewConversation}
+                  disabled={isSending}
+                  className="h-9 rounded-2xl border border-line px-4 text-xs uppercase tracking-[0.2em] text-ink transition hover:border-ink/50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  New conversation
+                </button>
+                <div className="text-right">
+                  <span className="text-xs font-mono uppercase tracking-[0.25em] text-ink/50">
+                    v0 runtime
+                  </span>
+                  <p className="text-[11px] text-ink/50">{statusLabel}</p>
+                </div>
+              </div>
             </div>
 
             <div className="mt-6 space-y-4">

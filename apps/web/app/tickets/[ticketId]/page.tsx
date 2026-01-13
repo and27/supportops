@@ -1,7 +1,5 @@
 import { cookies } from "next/headers";
 
-import LogoutButton from "../../../components/LogoutButton";
-import OrgSwitcher from "../../../components/OrgSwitcher";
 
 type Ticket = {
   id: string;
@@ -91,10 +89,6 @@ export default async function TicketPage({
             <p className="mt-2 text-sm text-ink/60">
               Status: {ticket.status} | Priority: {ticket.priority}
             </p>
-          </div>
-          <div className="flex flex-col items-start gap-3">
-            <OrgSwitcher />
-            <LogoutButton />
           </div>
         </div>
       </header>
