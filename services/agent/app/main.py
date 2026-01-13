@@ -127,6 +127,20 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             else:
                 reply, action, confidence = decide_response(payload.message)
                 run_metadata["decision_source"] = "heuristic"
+        reply_min_similarity = float(os.getenv("REPLY_MIN_SIMILARITY", "0.35"))
+        if action == "reply" and run_metadata.get("retrieval_source") == "vector":
+            run_metadata["reply_min_similarity"] = reply_min_similarity
+            top_similarity = run_metadata.get("top_similarity")
+            if isinstance(top_similarity, (int, float)) and top_similarity < reply_min_similarity:
+                guardrail_reason = "low_similarity"
+                run_metadata["guardrail"] = guardrail_reason
+                run_metadata["guardrail_original_action"] = action
+                action = "ask_clarifying"
+                confidence = min(confidence, 0.4)
+                reply = (
+                    "Can you add more context (account, steps, and expected behavior)?"
+                )
+                citations = None
         if action == "reply" and not citations:
             guardrail_reason = "missing_citations"
             run_metadata["guardrail"] = guardrail_reason
@@ -136,6 +150,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             reply = (
                 "Can you add more context (account, steps, and expected behavior)?"
             )
+            citations = None
         ticket_id = None
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
