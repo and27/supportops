@@ -27,6 +27,8 @@ runtime should orchestrate decisions while storage and retrieval are pluggable.
 - Adapters may use DB-specific features, but must keep outputs consistent.
 - Retrieval returns `(reply, citations, confidence, metadata)` as a stable tuple.
 - Retriever selection is controlled by `RETRIEVER_ENGINE` (default: `default`).
+- Optional engine: `llamaindex` (requires installing `llama-index` and setting
+  `DEFAULT_ORG_ID` so the adapter can load documents).
 
 ## Adapter Tests
 
