@@ -57,6 +57,12 @@ class RunsRepo(Protocol):
 
     def list_runs(self, org_id: str, limit: int) -> list[dict[str, Any]]: ...
 
+    def get_run(self, run_id: str) -> dict[str, Any] | None: ...
+
+    def list_runs_for_conversation(
+        self, org_id: str, conversation_id: str, limit: int
+    ) -> list[dict[str, Any]]: ...
+
 
 @runtime_checkable
 class OrgsRepo(Protocol):

@@ -16,9 +16,13 @@ from .context_utils import build_context, load_recent_messages
 from .embeddings import get_embedding_provider
 from .ingest import get_ingest_config, run_ingest
 from .logging_utils import log_event
+from .adapters.retriever_adapter import get_retriever
 from .adapters.supabase_repos import (
     SupabaseConversationsRepo,
+    SupabaseKBRepo,
+    SupabaseMembersRepo,
     SupabaseMessagesRepo,
+    SupabaseOrgsRepo,
     SupabaseRunsRepo,
     SupabaseTicketsRepo,
 )
@@ -29,7 +33,7 @@ from .orgs import (
     resolve_org_context,
     resolve_org_id,
 )
-from .retrieval import decide_response, normalize_tags, precheck_action, retrieve_kb_reply
+from .retrieval import decide_response, normalize_tags, precheck_action
 from .schemas import (
     AgentRunResponse,
     ChatRequest,
@@ -102,6 +106,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     user_id = auth_user_id or payload.user_id
     conversation_id = payload.conversation_id or str(uuid.uuid4())
     input_length_chars = len(payload.message or "")
+    retriever = get_retriever(supabase)
     conversations_repo = SupabaseConversationsRepo(supabase)
     messages_repo = SupabaseMessagesRepo(supabase)
     tickets_repo = SupabaseTicketsRepo(supabase)
@@ -176,7 +181,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             run_metadata["decision_source"] = "precheck"
         else:
             retrieval_start = perf_counter()
-            kb_reply = retrieve_kb_reply(supabase, decision_message, org_id)
+            kb_reply = retriever.retrieve(decision_message, org_id)
             retrieval_ms = int((perf_counter() - retrieval_start) * 1000)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
@@ -399,6 +404,7 @@ async def list_orgs(request: Request) -> list[OrgResponse]:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    orgs_repo = SupabaseOrgsRepo(supabase)
     org_ids: list[str] | None = None
     if auth_enabled():
         user_id = get_auth_user(request)
@@ -406,19 +412,20 @@ async def list_orgs(request: Request) -> list[OrgResponse]:
         org_ids = [member.get("org_id") for member in memberships if member.get("org_id")]
         if not org_ids:
             return []
+        orgs = []
+        for org_id in org_ids[:100]:
+            org = orgs_repo.get_org(org_id)
+            if org:
+                orgs.append(org)
+        return [OrgResponse(**org) for org in orgs]
 
     try:
-        query = supabase.table("orgs").select("*").order("created_at", desc=True)
-        if org_ids:
-            query = query.in_("id", org_ids)
-        result = query.execute()
-    except HTTPException:
-        raise
+        orgs = orgs_repo.list_orgs(100)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    return [OrgResponse(**org) for org in (result.data or [])]
+    return [OrgResponse(**org) for org in orgs]
 
 
 @app.post("/v1/orgs", response_model=OrgResponse, status_code=201)
@@ -429,24 +436,25 @@ async def create_org(payload: OrgCreate, request: Request) -> OrgResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
     user_id = get_auth_user(request)
     data = payload.model_dump()
     data["slug"] = data["slug"].strip().lower()
     try:
-        result = supabase.table("orgs").insert(data).execute()
+        org = orgs_repo.create_org(data)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not org:
         raise HTTPException(status_code=500, detail="org_create_failed")
 
-    org = result.data[0]
     if auth_enabled() and user_id:
         try:
-            supabase.table("members").insert(
+            members_repo.create_member(
                 {"org_id": org["id"], "user_id": user_id, "role": "admin"}
-            ).execute()
+            )
         except Exception as exc:
             log_event(logging.ERROR, "db_error", error=str(exc))
             raise HTTPException(status_code=500, detail="member_create_failed")
@@ -461,19 +469,20 @@ async def get_org(org_id: str, request: Request) -> OrgResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
+    orgs_repo = SupabaseOrgsRepo(supabase)
     user_id = get_auth_user(request)
     if auth_enabled():
         resolve_org_id(supabase, request, org_id, user_id)
     try:
-        result = supabase.table("orgs").select("*").eq("id", org_id).limit(1).execute()
+        org = orgs_repo.get_org(org_id)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", org_id=org_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not org:
         raise HTTPException(status_code=404, detail="org_not_found")
 
-    return OrgResponse(**result.data[0])
+    return OrgResponse(**org)
 
 
 @app.get("/v1/members", response_model=list[MemberResponse])
@@ -485,19 +494,14 @@ async def list_members(request: Request, org_id: str | None = None) -> list[Memb
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     resolved_org_id, _ = resolve_org_context(supabase, request, org_id)
+    members_repo = SupabaseMembersRepo(supabase)
     try:
-        result = (
-            supabase.table("members")
-            .select("*")
-            .eq("org_id", resolved_org_id)
-            .order("created_at", desc=True)
-            .execute()
-        )
+        members = members_repo.list_members(resolved_org_id, 200)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    return [MemberResponse(**member) for member in (result.data or [])]
+    return [MemberResponse(**member) for member in members]
 
 
 @app.post("/v1/members", response_model=MemberResponse, status_code=201)
@@ -512,16 +516,17 @@ async def create_member(payload: MemberCreate, request: Request) -> MemberRespon
     ensure_admin_access(supabase, org_id, user_id)
     data = payload.model_dump()
     data["org_id"] = org_id
+    members_repo = SupabaseMembersRepo(supabase)
     try:
-        result = supabase.table("members").insert(data).execute()
+        member = members_repo.create_member(data)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not member:
         raise HTTPException(status_code=500, detail="member_create_failed")
 
-    return MemberResponse(**result.data[0])
+    return MemberResponse(**member)
 
 
 @app.get("/v1/tickets/{ticket_id}", response_model=TicketResponse)
@@ -533,23 +538,16 @@ async def get_ticket(ticket_id: str, request: Request) -> TicketResponse:
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     org_id, _ = resolve_org_context(supabase, request)
+    tickets_repo = SupabaseTicketsRepo(supabase)
     try:
-        result = (
-            supabase.table("tickets")
-            .select("*")
-            .eq("id", ticket_id)
-            .eq("org_id", org_id)
-            .limit(1)
-            .execute()
-        )
+        ticket = tickets_repo.get_ticket(ticket_id)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", ticket_id=ticket_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not ticket or ticket.get("org_id") != org_id:
         raise HTTPException(status_code=404, detail="ticket_not_found")
 
-    ticket = result.data[0]
     return TicketResponse(**ticket)
 
 
@@ -563,20 +561,14 @@ async def list_tickets(request: Request, limit: int = 50) -> list[TicketResponse
 
     org_id, _ = resolve_org_context(supabase, request)
     safe_limit = max(1, min(limit, 100))
+    tickets_repo = SupabaseTicketsRepo(supabase)
     try:
-        result = (
-            supabase.table("tickets")
-            .select("*")
-            .eq("org_id", org_id)
-            .order("created_at", desc=True)
-            .limit(safe_limit)
-            .execute()
-        )
+        tickets = tickets_repo.list_tickets(org_id, safe_limit)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    return [TicketResponse(**ticket) for ticket in (result.data or [])]
+    return [TicketResponse(**ticket) for ticket in tickets]
 
 
 @app.get("/v1/conversations", response_model=list[ConversationResponse])
@@ -591,20 +583,14 @@ async def list_conversations(
 
     org_id, _ = resolve_org_context(supabase, request)
     safe_limit = max(1, min(limit, 100))
+    conversations_repo = SupabaseConversationsRepo(supabase)
     try:
-        result = (
-            supabase.table("conversations")
-            .select("*")
-            .eq("org_id", org_id)
-            .order("created_at", desc=True)
-            .limit(safe_limit)
-            .execute()
-        )
+        conversations = conversations_repo.list_conversations(org_id, safe_limit)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    return [ConversationResponse(**row) for row in (result.data or [])]
+    return [ConversationResponse(**row) for row in conversations]
 
 
 @app.get(
@@ -623,37 +609,25 @@ async def list_conversation_messages(
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     org_id, _ = resolve_org_context(supabase, request)
+    conversations_repo = SupabaseConversationsRepo(supabase)
+    messages_repo = SupabaseMessagesRepo(supabase)
     try:
-        convo = (
-            supabase.table("conversations")
-            .select("id")
-            .eq("id", conversation_id)
-            .eq("org_id", org_id)
-            .limit(1)
-            .execute()
-        )
+        convo = conversations_repo.get_conversation(conversation_id)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not convo.data:
+    if not convo or convo.get("org_id") != org_id:
         raise HTTPException(status_code=404, detail="conversation_not_found")
 
     safe_limit = max(1, min(limit, 200))
     try:
-        result = (
-            supabase.table("messages")
-            .select("id,conversation_id,role,content,metadata,created_at")
-            .eq("conversation_id", conversation_id)
-            .order("created_at")
-            .limit(safe_limit)
-            .execute()
-        )
+        messages = messages_repo.list_messages(conversation_id, safe_limit)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    return [MessageResponse(**row) for row in (result.data or [])]
+    return [MessageResponse(**row) for row in messages]
 
 
 @app.get("/v1/runs", response_model=list[AgentRunResponse])
@@ -670,22 +644,19 @@ async def list_runs(
 
     org_id, _ = resolve_org_context(supabase, request)
     safe_limit = max(1, min(limit, 100))
+    runs_repo = SupabaseRunsRepo(supabase)
     try:
-        query = (
-            supabase.table("agent_runs")
-            .select("*")
-            .eq("org_id", org_id)
-            .order("created_at", desc=True)
-            .limit(safe_limit)
-        )
         if conversation_id:
-            query = query.eq("conversation_id", conversation_id)
-        result = query.execute()
+            runs = runs_repo.list_runs_for_conversation(
+                org_id, conversation_id, safe_limit
+            )
+        else:
+            runs = runs_repo.list_runs(org_id, safe_limit)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    return [AgentRunResponse(**run) for run in (result.data or [])]
+    return [AgentRunResponse(**run) for run in runs]
 
 
 @app.get("/v1/runs/{run_id}", response_model=AgentRunResponse)
@@ -697,23 +668,17 @@ async def get_run(run_id: str, request: Request) -> AgentRunResponse:
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     org_id, _ = resolve_org_context(supabase, request)
+    runs_repo = SupabaseRunsRepo(supabase)
     try:
-        result = (
-            supabase.table("agent_runs")
-            .select("*")
-            .eq("id", run_id)
-            .eq("org_id", org_id)
-            .limit(1)
-            .execute()
-        )
+        run = runs_repo.get_run(run_id)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", run_id=run_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not run or run.get("org_id") != org_id:
         raise HTTPException(status_code=404, detail="run_not_found")
 
-    return AgentRunResponse(**result.data[0])
+    return AgentRunResponse(**run)
 
 
 @app.get("/v1/kb", response_model=list[KBDocument])
@@ -725,19 +690,14 @@ async def list_kb(request: Request) -> list[KBDocument]:
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     org_id, _ = resolve_org_context(supabase, request)
+    kb_repo = SupabaseKBRepo(supabase)
     try:
-        result = (
-            supabase.table("kb_documents")
-            .select("*")
-            .eq("org_id", org_id)
-            .order("created_at", desc=True)
-            .execute()
-        )
+        documents = kb_repo.list_documents(org_id, 200)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    return [KBDocument(**doc) for doc in (result.data or [])]
+    return [KBDocument(**doc) for doc in documents]
 
 
 @app.post("/v1/kb", response_model=KBDocument, status_code=201)
@@ -753,17 +713,17 @@ async def create_kb(payload: KBCreate, request: Request) -> KBDocument:
     data = payload.model_dump()
     data["tags"] = normalize_tags(data.get("tags") or [])
     data["org_id"] = org_id
+    kb_repo = SupabaseKBRepo(supabase)
 
     try:
-        result = supabase.table("kb_documents").insert(data).execute()
+        doc = kb_repo.create_document(data)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not doc:
         raise HTTPException(status_code=500, detail="kb_create_failed")
 
-    doc = result.data[0]
     _, _, auto_ingest = get_ingest_config()
     if auto_ingest:
         try:
@@ -800,23 +760,17 @@ async def get_kb(doc_id: str, request: Request) -> KBDocument:
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     org_id, _ = resolve_org_context(supabase, request)
+    kb_repo = SupabaseKBRepo(supabase)
     try:
-        result = (
-            supabase.table("kb_documents")
-            .select("*")
-            .eq("id", doc_id)
-            .eq("org_id", org_id)
-            .limit(1)
-            .execute()
-        )
+        doc = kb_repo.get_document(doc_id)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", doc_id=doc_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not doc or doc.get("org_id") != org_id:
         raise HTTPException(status_code=404, detail="kb_not_found")
 
-    return KBDocument(**result.data[0])
+    return KBDocument(**doc)
 
 
 @app.patch("/v1/kb/{doc_id}", response_model=KBDocument)
@@ -833,23 +787,22 @@ async def update_kb(doc_id: str, payload: KBUpdate, request: Request) -> KBDocum
     if "tags" in updates and updates["tags"] is not None:
         updates["tags"] = normalize_tags(updates["tags"])
     updates["updated_at"] = utc_now()
+    kb_repo = SupabaseKBRepo(supabase)
 
     try:
-        result = (
-            supabase.table("kb_documents")
-            .update(updates)
-            .eq("id", doc_id)
-            .eq("org_id", org_id)
-            .execute()
-        )
+        existing = kb_repo.get_document(doc_id)
+        if not existing or existing.get("org_id") != org_id:
+            raise HTTPException(status_code=404, detail="kb_not_found")
+        doc = kb_repo.update_document(doc_id, updates)
+    except HTTPException:
+        raise
     except Exception as exc:
         log_event(logging.ERROR, "db_error", doc_id=doc_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not result.data:
+    if not doc:
         raise HTTPException(status_code=404, detail="kb_not_found")
 
-    doc = result.data[0]
     _, _, auto_ingest = get_ingest_config()
     if auto_ingest:
         try:
@@ -895,4 +848,3 @@ async def ingest(payload: IngestRequest, request: Request) -> IngestResponse:
         chunk_overlap=payload.chunk_overlap,
         force=payload.force,
     )
-

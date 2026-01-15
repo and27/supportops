@@ -183,6 +183,30 @@ class SupabaseRunsRepo(RunsRepo):
         )
         return result.data or []
 
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        result = (
+            self._supabase.table("agent_runs")
+            .select("*")
+            .eq("id", run_id)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def list_runs_for_conversation(
+        self, org_id: str, conversation_id: str, limit: int
+    ) -> list[dict[str, Any]]:
+        result = (
+            self._supabase.table("agent_runs")
+            .select("*")
+            .eq("org_id", org_id)
+            .eq("conversation_id", conversation_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+
 
 class SupabaseOrgsRepo(OrgsRepo):
     def __init__(self, supabase: Client) -> None:
