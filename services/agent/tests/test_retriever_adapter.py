@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from app.adapters.retriever_adapter import DefaultRetriever
+from app.adapters.retriever_adapter import DefaultRetriever, get_retriever
 
 
 class StubKBRepo:
@@ -28,6 +28,15 @@ class RetrieverAdapterTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertIn("search_by_text", kb_repo.calls)
+
+    def test_llamaindex_engine_falls_back(self) -> None:
+        supabase = object()
+        kb_repo = StubKBRepo()
+        os.environ["RETRIEVER_ENGINE"] = "llamaindex"
+
+        retriever = get_retriever(supabase, kb_repo)
+
+        self.assertIsInstance(retriever, DefaultRetriever)
 
 
 if __name__ == "__main__":
