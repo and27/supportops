@@ -95,7 +95,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     org_id, auth_user_id = resolve_org_context(supabase, request, payload.org_id)
     user_id = auth_user_id or payload.user_id
     conversation_id = payload.conversation_id or str(uuid.uuid4())
-    client_host = request.client.host if request.client else "unknown"
+    input_length_chars = len(payload.message or "")
 
     log_event(
         logging.INFO,
@@ -104,7 +104,14 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         user_id=user_id,
         org_id=org_id,
         channel=payload.channel,
-        client_ip=client_host,
+    )
+    log_event(
+        logging.INFO,
+        "request_started",
+        conversation_id=conversation_id,
+        tenant_id=org_id,
+        channel=payload.channel,
+        input_length_chars=input_length_chars,
     )
 
     try:
@@ -143,6 +150,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         guardrail_reason = None
         decision_reason: str | None = None
         decision_message = payload.message
+        retrieval_ms = 0
         if context_text:
             decision_message = f"{context_text}\nuser: {payload.message}"
             run_metadata["context_messages"] = len(prior_messages)
@@ -157,7 +165,9 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             run_metadata["precheck_action"] = action
             run_metadata["decision_source"] = "precheck"
         else:
+            retrieval_start = perf_counter()
             kb_reply = retrieve_kb_reply(supabase, decision_message, org_id)
+            retrieval_ms = int((perf_counter() - retrieval_start) * 1000)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
                 action = "reply"
@@ -172,6 +182,25 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                     decision_message
                 )
                 run_metadata["decision_source"] = "heuristic"
+        retrieval_source = run_metadata.get("retrieval_source") or "none"
+        if retrieval_source == "vector":
+            retrieval_candidates_count = int(run_metadata.get("match_count") or 0)
+        elif retrieval_source == "document":
+            retrieval_candidates_count = int(run_metadata.get("document_match_count") or 0)
+        else:
+            retrieval_candidates_count = 0
+        top_similarity = run_metadata.get("top_similarity")
+        log_event(
+            logging.INFO,
+            "retrieval_done",
+            conversation_id=conversation_id,
+            tenant_id=org_id,
+            channel=payload.channel,
+            retrieval_ms=retrieval_ms,
+            retrieval_candidates_count=retrieval_candidates_count,
+            top_similarity=top_similarity,
+            retrieval_source=retrieval_source,
+        )
         reply_min_similarity = float(os.getenv("REPLY_MIN_SIMILARITY", "0.35"))
         if action == "reply" and run_metadata.get("retrieval_source") == "vector":
             run_metadata["reply_min_similarity"] = reply_min_similarity
@@ -204,6 +233,27 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             decision_reason = "guardrail_missing_citations"
         if decision_reason:
             run_metadata["decision_reason"] = decision_reason
+        if not decision_reason:
+            decision_reason = "unspecified"
+            run_metadata["decision_reason"] = decision_reason
+        decision = action
+        handoff_type = None
+        if action in ("create_ticket", "escalate"):
+            decision = "handoff"
+            handoff_type = action
+        guardrails_triggered = [guardrail_reason] if guardrail_reason else []
+        log_event(
+            logging.INFO,
+            "decision_made",
+            conversation_id=conversation_id,
+            tenant_id=org_id,
+            channel=payload.channel,
+            decision=decision,
+            decision_reason=decision_reason,
+            guardrails_triggered=guardrails_triggered,
+            has_citations=bool(citations),
+            handoff_type=handoff_type,
+        )
 
         expected_action, eval_category = extract_eval_metadata(payload.metadata)
         if expected_action:
@@ -243,6 +293,18 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         ).execute()
 
         latency_ms = int((perf_counter() - start_time) * 1000)
+        response_tokens_estimated = int(len(reply or "") / 4)
+        response_event = "handoff_sent" if decision == "handoff" else "reply_sent"
+        log_event(
+            logging.INFO,
+            response_event,
+            conversation_id=conversation_id,
+            tenant_id=org_id,
+            channel=payload.channel,
+            response_tokens_estimated=response_tokens_estimated,
+            latency_ms_total=latency_ms,
+            handoff_type=handoff_type,
+        )
         run_input = {
             "message": payload.message,
             "decision_message": decision_message,
