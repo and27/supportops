@@ -28,6 +28,14 @@ def decide_response(message: str) -> tuple[str, str, float, str]:
             "heuristic_ticket_keyword",
         )
 
+    if any(keyword in msg for keyword in ("integration", "integrations", "webhook", "api")):
+        return (
+            "Can you share the provider/tool, endpoint or event, and any error you see?",
+            "ask_clarifying",
+            0.45,
+            "heuristic_integration",
+        )
+
     if len(msg.split()) < 4:
         return (
             "Can you add more context (account, steps, and expected behavior)?",
