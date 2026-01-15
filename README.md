@@ -77,6 +77,12 @@ Use `http://localhost:3000/login` to sign in when auth is enabled.
 - For vector search, replies are blocked when `top_similarity` is below `REPLY_MIN_SIMILARITY`.
 - Recent conversation context is appended (last N messages) to help follow-up questions.
 
+### 3d) Retrieval engine selection (optional)
+
+- Default retriever: `RETRIEVER_ENGINE=default`
+- Optional: `RETRIEVER_ENGINE=llamaindex` (requires `llama-index` installed)
+- For the optional engine, set `DEFAULT_ORG_ID` so it can load KB docs.
+
 ### 4) Run evals
 
 ```bash
