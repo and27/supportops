@@ -101,6 +101,12 @@ repo secret pointing at a reachable agent environment.
 The eval runner creates/uses an org with slug `eval` (configurable via
 `EVAL_ORG_SLUG`) and seeds KB data into that org to avoid cross-contamination.
 
+### 4a) Adapter contract tests
+
+```bash
+python -m unittest discover services/agent/tests
+```
+
 ### 5) Seed KB fixtures (optional)
 
 ```bash
