@@ -19,6 +19,9 @@ class ChatResponse(BaseModel):
     confidence: float
     ticket_id: str | None = None
     citations: list[dict[str, str]] | None = None
+    decision_reason: str | None = None
+    decision_source: str | None = None
+    guardrail: str | None = None
 
 
 class KBDocument(BaseModel):

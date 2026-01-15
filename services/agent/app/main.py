@@ -51,6 +51,21 @@ app = FastAPI()
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+
+def extract_eval_metadata(
+    metadata: dict[str, Any] | None,
+) -> tuple[str | None, str | None]:
+    if not metadata:
+        return None, None
+    eval_payload = metadata.get("eval")
+    if isinstance(eval_payload, dict):
+        expected = eval_payload.get("expected_action") or eval_payload.get("action")
+        category = eval_payload.get("category")
+        return expected, category
+    expected = metadata.get("expected_action") or metadata.get("eval_expected_action")
+    category = metadata.get("category") or metadata.get("eval_category")
+    return expected, category
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
     log_event(logging.WARNING, "http_error", status_code=exc.status_code, detail=exc.detail)
@@ -126,6 +141,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         citations = None
         run_metadata: dict[str, Any] = {"retrieval_source": "none"}
         guardrail_reason = None
+        decision_reason: str | None = None
         decision_message = payload.message
         if context_text:
             decision_message = f"{context_text}\nuser: {payload.message}"
@@ -137,7 +153,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
         precheck = precheck_action(decision_message)
         if precheck:
-            reply, action, confidence = precheck
+            reply, action, confidence, decision_reason = precheck
             run_metadata["precheck_action"] = action
             run_metadata["decision_source"] = "precheck"
         else:
@@ -146,8 +162,15 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 reply, citations, confidence, run_metadata = kb_reply
                 action = "reply"
                 run_metadata["decision_source"] = "kb"
+                decision_reason = (
+                    "kb_vector_match"
+                    if run_metadata.get("retrieval_source") == "vector"
+                    else "kb_document_match"
+                )
             else:
-                reply, action, confidence = decide_response(decision_message)
+                reply, action, confidence, decision_reason = decide_response(
+                    decision_message
+                )
                 run_metadata["decision_source"] = "heuristic"
         reply_min_similarity = float(os.getenv("REPLY_MIN_SIMILARITY", "0.35"))
         if action == "reply" and run_metadata.get("retrieval_source") == "vector":
@@ -157,6 +180,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 guardrail_reason = "low_similarity"
                 run_metadata["guardrail"] = guardrail_reason
                 run_metadata["guardrail_original_action"] = action
+                run_metadata["decision_reason_original"] = decision_reason
                 action = "ask_clarifying"
                 confidence = min(confidence, 0.4)
                 reply = (
@@ -164,10 +188,12 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 )
                 citations = None
                 run_metadata["decision_source"] = "guardrail"
+                decision_reason = "guardrail_low_similarity"
         if action == "reply" and not citations:
             guardrail_reason = "missing_citations"
             run_metadata["guardrail"] = guardrail_reason
             run_metadata["guardrail_original_action"] = action
+            run_metadata["decision_reason_original"] = decision_reason
             action = "ask_clarifying"
             confidence = min(confidence, 0.4)
             reply = (
@@ -175,6 +201,24 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             )
             citations = None
             run_metadata["decision_source"] = "guardrail"
+            decision_reason = "guardrail_missing_citations"
+        if decision_reason:
+            run_metadata["decision_reason"] = decision_reason
+
+        expected_action, eval_category = extract_eval_metadata(payload.metadata)
+        if expected_action:
+            run_metadata["eval_expected_action"] = expected_action
+            run_metadata["eval_category"] = eval_category or "uncategorized"
+            run_metadata["eval_action_match"] = action == expected_action
+            log_event(
+                logging.INFO,
+                "eval_action_result",
+                conversation_id=conversation_id,
+                expected_action=expected_action,
+                actual_action=action,
+                category=eval_category or "uncategorized",
+                match=action == expected_action,
+            )
         ticket_id = None
         if action in ("create_ticket", "escalate"):
             ticket_result = supabase.table("tickets").insert(
@@ -213,6 +257,9 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             "confidence": confidence,
             "ticket_id": ticket_id,
             "citations": citations,
+            "decision_reason": decision_reason,
+            "decision_source": run_metadata.get("decision_source"),
+            "guardrail": guardrail_reason,
         }
         try:
             supabase.table("agent_runs").insert(
@@ -256,6 +303,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         retrieval_source=run_metadata.get("retrieval_source"),
         decision_source=run_metadata.get("decision_source"),
         guardrail=guardrail_reason,
+        decision_reason=decision_reason,
     )
 
     return ChatResponse(
@@ -265,6 +313,9 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         confidence=confidence,
         ticket_id=ticket_id,
         citations=citations,
+        decision_reason=decision_reason,
+        decision_source=run_metadata.get("decision_source"),
+        guardrail=guardrail_reason,
     )
 
 

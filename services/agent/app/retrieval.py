@@ -9,13 +9,14 @@ from .embeddings import get_embedding_provider
 from .logging_utils import log_event
 
 
-def decide_response(message: str) -> tuple[str, str, float]:
+def decide_response(message: str) -> tuple[str, str, float, str]:
     msg = message.strip().lower()
     if not msg:
         return (
             "Please share a bit more detail so I can help.",
             "ask_clarifying",
             0.2,
+            "heuristic_empty",
         )
 
     ticket_keywords = ("bug", "error", "issue", "incident", "crash", "outage", "fail")
@@ -24,6 +25,7 @@ def decide_response(message: str) -> tuple[str, str, float]:
             "Thanks for reporting this. I am creating a ticket and will follow up with next steps.",
             "create_ticket",
             0.35,
+            "heuristic_ticket_keyword",
         )
 
     if len(msg.split()) < 4:
@@ -31,16 +33,18 @@ def decide_response(message: str) -> tuple[str, str, float]:
             "Can you add more context (account, steps, and expected behavior)?",
             "ask_clarifying",
             0.45,
+            "heuristic_short",
         )
 
     return (
         "Thanks. I am checking our knowledge base. For now, try restarting the app and share any error code.",
         "reply",
         0.7,
+        "heuristic_generic_reply",
     )
 
 
-def precheck_action(message: str) -> tuple[str, str, float] | None:
+def precheck_action(message: str) -> tuple[str, str, float, str] | None:
     msg = message.strip().lower()
     tags = extract_hash_tags(msg)
     if "#" in msg:
@@ -55,6 +59,7 @@ def precheck_action(message: str) -> tuple[str, str, float] | None:
             "Please share a bit more detail so I can help.",
             "ask_clarifying",
             0.2,
+            "precheck_empty",
         )
 
     ticket_keywords = ("bug", "error", "issue", "incident", "crash", "outage", "fail")
@@ -63,6 +68,7 @@ def precheck_action(message: str) -> tuple[str, str, float] | None:
             "Thanks for reporting this. I am creating a ticket and will follow up with next steps.",
             "create_ticket",
             0.35,
+            "precheck_ticket_keyword",
         )
 
     if tags:
@@ -73,6 +79,7 @@ def precheck_action(message: str) -> tuple[str, str, float] | None:
             "Can you add more context (account, steps, and expected behavior)?",
             "ask_clarifying",
             0.45,
+            "precheck_short",
         )
 
     return None
