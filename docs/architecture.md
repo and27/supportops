@@ -34,3 +34,5 @@ Run adapter contract tests:
 ```bash
 python -m unittest discover services/agent/tests
 ```
+
+These tests cover repo adapters and the retriever adapter delegation.
