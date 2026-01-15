@@ -5,6 +5,7 @@ from app.adapters.supabase_repos import (
     SupabaseConversationsRepo,
     SupabaseKBRepo,
     SupabaseMessagesRepo,
+    SupabaseRunsRepo,
 )
 
 
@@ -117,6 +118,18 @@ class SupabaseReposContractTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertTrue(any(call[0] == "or_" for call in table.calls))
+
+    def test_runs_list_for_conversation_filters(self) -> None:
+        supabase = StubSupabase()
+        table = supabase.table("agent_runs")
+        table._result_data = [{"id": "r1"}]
+        repo = SupabaseRunsRepo(supabase)
+
+        rows = repo.list_runs_for_conversation("org1", "c1", 10)
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn(("eq", ("org_id", "org1")), table.calls)
+        self.assertIn(("eq", ("conversation_id", "c1")), table.calls)
 
 
 if __name__ == "__main__":
