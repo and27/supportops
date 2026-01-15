@@ -1,25 +1,17 @@
 import logging
 from typing import Any
 
-from supabase import Client
-
 from .logging_utils import log_event
+from .ports import MessagesRepo
 
 
 def load_recent_messages(
-    supabase: Client, conversation_id: str, limit: int
+    messages_repo: MessagesRepo, conversation_id: str, limit: int
 ) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
     try:
-        result = (
-            supabase.table("messages")
-            .select("role,content,created_at")
-            .eq("conversation_id", conversation_id)
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        result = messages_repo.list_messages(conversation_id, limit)
     except Exception as exc:
         log_event(
             logging.WARNING,
@@ -28,8 +20,7 @@ def load_recent_messages(
             error=str(exc),
         )
         return []
-    data = result.data or []
-    return list(reversed(data))
+    return list(reversed(result))
 
 
 def build_context(messages: list[dict[str, Any]], max_chars: int) -> str:

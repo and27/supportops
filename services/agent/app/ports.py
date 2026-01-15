@@ -52,6 +52,15 @@ class KBRepo(Protocol):
 
 
 @runtime_checkable
+class KBChunksRepo(Protocol):
+    def list_chunks(self, document_id: str) -> list[dict[str, Any]]: ...
+
+    def delete_chunks(self, chunk_ids: list[str]) -> None: ...
+
+    def insert_chunks(self, rows: list[dict[str, Any]]) -> None: ...
+
+
+@runtime_checkable
 class RunsRepo(Protocol):
     def create_run(self, data: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -72,6 +81,8 @@ class OrgsRepo(Protocol):
 
     def get_org(self, org_id: str) -> dict[str, Any] | None: ...
 
+    def get_org_by_slug(self, slug: str) -> dict[str, Any] | None: ...
+
 
 @runtime_checkable
 class MembersRepo(Protocol):
@@ -80,6 +91,8 @@ class MembersRepo(Protocol):
     def create_member(self, data: dict[str, Any]) -> dict[str, Any]: ...
 
     def get_member_role(self, org_id: str, user_id: str) -> str | None: ...
+
+    def list_memberships(self, user_id: str) -> list[dict[str, Any]]: ...
 
 
 @runtime_checkable

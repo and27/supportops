@@ -19,6 +19,7 @@ from .logging_utils import log_event
 from .adapters.retriever_adapter import get_retriever
 from .adapters.supabase_repos import (
     SupabaseConversationsRepo,
+    SupabaseKBChunksRepo,
     SupabaseKBRepo,
     SupabaseMembersRepo,
     SupabaseMessagesRepo,
@@ -102,11 +103,16 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, auth_user_id = resolve_org_context(supabase, request, payload.org_id)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, auth_user_id = resolve_org_context(
+        orgs_repo, members_repo, request, payload.org_id
+    )
     user_id = auth_user_id or payload.user_id
     conversation_id = payload.conversation_id or str(uuid.uuid4())
     input_length_chars = len(payload.message or "")
-    retriever = get_retriever(supabase)
+    kb_repo = SupabaseKBRepo(supabase)
+    retriever = get_retriever(supabase, kb_repo)
     conversations_repo = SupabaseConversationsRepo(supabase)
     messages_repo = SupabaseMessagesRepo(supabase)
     tickets_repo = SupabaseTicketsRepo(supabase)
@@ -147,7 +153,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         context_text = ""
         if payload.conversation_id:
             prior_messages = load_recent_messages(
-                supabase, conversation_id, context_message_limit
+                messages_repo, conversation_id, context_message_limit
             )
             context_text = build_context(prior_messages, context_max_chars)
 
@@ -405,10 +411,11 @@ async def list_orgs(request: Request) -> list[OrgResponse]:
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
     org_ids: list[str] | None = None
     if auth_enabled():
         user_id = get_auth_user(request)
-        memberships = load_memberships(supabase, user_id)
+        memberships = load_memberships(members_repo, user_id)
         org_ids = [member.get("org_id") for member in memberships if member.get("org_id")]
         if not org_ids:
             return []
@@ -470,9 +477,10 @@ async def get_org(org_id: str, request: Request) -> OrgResponse:
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
     orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
     user_id = get_auth_user(request)
     if auth_enabled():
-        resolve_org_id(supabase, request, org_id, user_id)
+        resolve_org_id(orgs_repo, members_repo, request, org_id, user_id)
     try:
         org = orgs_repo.get_org(org_id)
     except Exception as exc:
@@ -493,8 +501,11 @@ async def list_members(request: Request, org_id: str | None = None) -> list[Memb
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    resolved_org_id, _ = resolve_org_context(supabase, request, org_id)
+    orgs_repo = SupabaseOrgsRepo(supabase)
     members_repo = SupabaseMembersRepo(supabase)
+    resolved_org_id, _ = resolve_org_context(
+        orgs_repo, members_repo, request, org_id
+    )
     try:
         members = members_repo.list_members(resolved_org_id, 200)
     except Exception as exc:
@@ -512,11 +523,14 @@ async def create_member(payload: MemberCreate, request: Request) -> MemberRespon
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, user_id = resolve_org_context(supabase, request, payload.org_id)
-    ensure_admin_access(supabase, org_id, user_id)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, user_id = resolve_org_context(
+        orgs_repo, members_repo, request, payload.org_id
+    )
+    ensure_admin_access(members_repo, org_id, user_id)
     data = payload.model_dump()
     data["org_id"] = org_id
-    members_repo = SupabaseMembersRepo(supabase)
     try:
         member = members_repo.create_member(data)
     except Exception as exc:
@@ -537,7 +551,9 @@ async def get_ticket(ticket_id: str, request: Request) -> TicketResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     tickets_repo = SupabaseTicketsRepo(supabase)
     try:
         ticket = tickets_repo.get_ticket(ticket_id)
@@ -559,7 +575,9 @@ async def list_tickets(request: Request, limit: int = 50) -> list[TicketResponse
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     safe_limit = max(1, min(limit, 100))
     tickets_repo = SupabaseTicketsRepo(supabase)
     try:
@@ -581,7 +599,9 @@ async def list_conversations(
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     safe_limit = max(1, min(limit, 100))
     conversations_repo = SupabaseConversationsRepo(supabase)
     try:
@@ -608,7 +628,9 @@ async def list_conversation_messages(
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     conversations_repo = SupabaseConversationsRepo(supabase)
     messages_repo = SupabaseMessagesRepo(supabase)
     try:
@@ -642,7 +664,9 @@ async def list_runs(
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     safe_limit = max(1, min(limit, 100))
     runs_repo = SupabaseRunsRepo(supabase)
     try:
@@ -667,7 +691,9 @@ async def get_run(run_id: str, request: Request) -> AgentRunResponse:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     runs_repo = SupabaseRunsRepo(supabase)
     try:
         run = runs_repo.get_run(run_id)
@@ -689,7 +715,9 @@ async def list_kb(request: Request) -> list[KBDocument]:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     kb_repo = SupabaseKBRepo(supabase)
     try:
         documents = kb_repo.list_documents(org_id, 200)
@@ -708,8 +736,12 @@ async def create_kb(payload: KBCreate, request: Request) -> KBDocument:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, user_id = resolve_org_context(supabase, request, payload.org_id)
-    ensure_write_access(request, supabase, org_id, user_id)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, user_id = resolve_org_context(
+        orgs_repo, members_repo, request, payload.org_id
+    )
+    ensure_write_access(request, members_repo, org_id, user_id)
     data = payload.model_dump()
     data["tags"] = normalize_tags(data.get("tags") or [])
     data["org_id"] = org_id
@@ -730,7 +762,8 @@ async def create_kb(payload: KBCreate, request: Request) -> KBDocument:
             provider = get_embedding_provider()
             chunk_size, chunk_overlap, _ = get_ingest_config()
             run_ingest(
-                supabase,
+                kb_repo,
+                SupabaseKBChunksRepo(supabase),
                 provider,
                 doc["id"],
                 doc.get("org_id"),
@@ -759,7 +792,9 @@ async def get_kb(doc_id: str, request: Request) -> KBDocument:
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, _ = resolve_org_context(supabase, request)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request)
     kb_repo = SupabaseKBRepo(supabase)
     try:
         doc = kb_repo.get_document(doc_id)
@@ -781,8 +816,10 @@ async def update_kb(doc_id: str, payload: KBUpdate, request: Request) -> KBDocum
         log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="supabase_not_configured")
 
-    org_id, user_id = resolve_org_context(supabase, request)
-    ensure_write_access(request, supabase, org_id, user_id)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, user_id = resolve_org_context(orgs_repo, members_repo, request)
+    ensure_write_access(request, members_repo, org_id, user_id)
     updates = payload.model_dump(exclude_unset=True)
     if "tags" in updates and updates["tags"] is not None:
         updates["tags"] = normalize_tags(updates["tags"])
@@ -809,7 +846,8 @@ async def update_kb(doc_id: str, payload: KBUpdate, request: Request) -> KBDocum
             provider = get_embedding_provider()
             chunk_size, chunk_overlap, _ = get_ingest_config()
             run_ingest(
-                supabase,
+                kb_repo,
+                SupabaseKBChunksRepo(supabase),
                 provider,
                 doc["id"],
                 doc.get("org_id"),
@@ -838,9 +876,14 @@ async def ingest(payload: IngestRequest, request: Request) -> IngestResponse:
     except RuntimeError as exc:
         log_event(logging.ERROR, "ingest_not_configured", error=str(exc))
         raise HTTPException(status_code=500, detail="ingest_not_configured")
-    org_id, _ = resolve_org_context(supabase, request, payload.org_id)
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, _ = resolve_org_context(orgs_repo, members_repo, request, payload.org_id)
+    kb_repo = SupabaseKBRepo(supabase)
+    chunks_repo = SupabaseKBChunksRepo(supabase)
     return run_ingest(
-        supabase,
+        kb_repo,
+        chunks_repo,
         provider,
         payload.document_id,
         org_id,

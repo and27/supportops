@@ -1,20 +1,140 @@
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
-from ..ports import Retriever
-from ..retrieval import retrieve_kb_reply
+from ..embeddings import get_embedding_provider
+from ..logging_utils import log_event
+from ..ports import KBRepo, Retriever
+from ..retrieval import (
+    build_kb_chunk_reply,
+    build_kb_reply,
+    extract_hash_tags,
+    extract_keywords,
+)
 
 
 class DefaultRetriever(Retriever):
-    def __init__(self, supabase) -> None:
+    def __init__(self, supabase, kb_repo: KBRepo) -> None:
         self._supabase = supabase
+        self._kb_repo = kb_repo
 
     def retrieve(
         self, message: str, org_id: str | None
     ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
-        return retrieve_kb_reply(self._supabase, message, org_id)
+        query = message.strip().replace(",", " ")
+        if not query:
+            return None
+
+        tags = extract_hash_tags(query)
+        if tags:
+            tag_value = tags[0]
+            tagged = self._kb_repo.search_by_tags(org_id or "", [tag_value], 3)
+            log_event(
+                logging.INFO,
+                "kb_tag_lookup",
+                tag=tag_value,
+                org_id=org_id,
+                match_count=len(tagged),
+            )
+            if tagged:
+                reply, citations = build_kb_reply(tagged[0])
+                return (
+                    reply,
+                    citations,
+                    0.85,
+                    {"retrieval_source": "document", "document_match_count": len(tagged)},
+                )
+
+        vector_result = self._retrieve_vector(query, org_id)
+        if vector_result:
+            return vector_result
+
+        keywords = extract_keywords(query)
+        if keywords:
+            or_query = " ".join(keywords)
+            docs = self._kb_repo.search_by_text(org_id or "", or_query, 3)
+            if docs:
+                reply, citations = build_kb_reply(docs[0])
+                return (
+                    reply,
+                    citations,
+                    0.85,
+                    {
+                        "retrieval_source": "document",
+                        "document_match_count": len(docs),
+                    },
+                )
+
+        docs = self._kb_repo.search_by_text(org_id or "", query, 3)
+        if docs:
+            reply, citations = build_kb_reply(docs[0])
+            return (
+                reply,
+                citations,
+                0.85,
+                {"retrieval_source": "document", "document_match_count": len(docs)},
+            )
+
+        return None
+
+    def _retrieve_vector(
+        self, query: str, org_id: str | None
+    ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
+        enabled = os.getenv("VECTOR_SEARCH_ENABLED", "false").lower() == "true"
+        if not enabled:
+            return None
+
+        try:
+            provider = get_embedding_provider()
+        except RuntimeError as exc:
+            log_event(logging.WARNING, "embedding_not_configured", error=str(exc))
+            return None
+
+        try:
+            limit = int(os.getenv("VECTOR_MATCH_COUNT", "3"))
+            min_similarity = float(os.getenv("VECTOR_MIN_SIMILARITY", "0.2"))
+            embedding = provider.embed([query])[0]
+            result = (
+                self._supabase.rpc(
+                    "match_kb_chunks",
+                    {
+                        "query_embedding": embedding,
+                        "match_count": limit,
+                        "min_similarity": min_similarity,
+                        "p_org_id": org_id,
+                    },
+                )
+                .execute()
+            )
+            data = result.data or []
+            top_similarity = data[0].get("similarity") if data else None
+            log_event(
+                logging.INFO,
+                "kb_vector_matches",
+                count=len(data),
+                top_similarity=top_similarity,
+                min_similarity=min_similarity,
+            )
+            if not data:
+                return None
+            reply, citations = build_kb_chunk_reply(data[0])
+            return (
+                reply,
+                citations,
+                0.9,
+                {
+                    "retrieval_source": "vector",
+                    "match_count": len(data),
+                    "top_similarity": top_similarity,
+                    "min_similarity": min_similarity,
+                },
+            )
+        except Exception as exc:
+            log_event(logging.ERROR, "kb_vector_search_error", error=str(exc))
+            return None
 
 
-def get_retriever(supabase) -> Retriever:
-    return DefaultRetriever(supabase)
+def get_retriever(supabase, kb_repo: KBRepo) -> Retriever:
+    return DefaultRetriever(supabase, kb_repo)

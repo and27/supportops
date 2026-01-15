@@ -3,10 +3,10 @@ import os
 from hashlib import sha256
 
 from fastapi import HTTPException
-from supabase import Client
 
 from .embeddings import EmbeddingProvider
 from .logging_utils import log_event
+from .ports import KBChunksRepo, KBRepo
 from .schemas import IngestResponse
 
 
@@ -43,7 +43,8 @@ def get_ingest_config() -> tuple[int, int, bool]:
 
 
 def run_ingest(
-    supabase: Client,
+    kb_repo: KBRepo,
+    chunks_repo: KBChunksRepo,
     provider: EmbeddingProvider,
     document_id: str,
     org_id: str | None,
@@ -61,18 +62,13 @@ def run_ingest(
     )
 
     try:
-        query = supabase.table("kb_documents").select("*").eq("id", document_id)
-        if org_id:
-            query = query.eq("org_id", org_id)
-        doc_result = query.limit(1).execute()
+        document = kb_repo.get_document(document_id)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
-    if not doc_result.data:
+    if not document or (org_id and document.get("org_id") != org_id):
         raise HTTPException(status_code=404, detail="kb_not_found")
-
-    document = doc_result.data[0]
     doc_org_id = document.get("org_id")
     if not doc_org_id:
         log_event(logging.ERROR, "kb_missing_org", document_id=document_id)
@@ -91,19 +87,14 @@ def run_ingest(
         unique_chunks.append(chunks[index])
 
     try:
-        existing = (
-            supabase.table("kb_chunks")
-            .select("id,chunk_hash")
-            .eq("document_id", document_id)
-            .execute()
-        )
+        existing = chunks_repo.list_chunks(document_id)
     except Exception as exc:
         log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
         raise HTTPException(status_code=500, detail="db_error")
 
     existing_hashes = {
         row.get("chunk_hash"): row.get("id")
-        for row in (existing.data or [])
+        for row in (existing or [])
         if row.get("chunk_hash")
     }
     new_hashes = set(unique_map.keys())
@@ -118,7 +109,7 @@ def run_ingest(
 
     if to_delete:
         try:
-            supabase.table("kb_chunks").delete().in_("id", to_delete).execute()
+            chunks_repo.delete_chunks(to_delete)
             chunks_deleted = len(to_delete)
         except Exception as exc:
             log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
@@ -153,7 +144,7 @@ def run_ingest(
                 }
             )
         try:
-            supabase.table("kb_chunks").insert(rows).execute()
+            chunks_repo.insert_chunks(rows)
             chunks_inserted = len(rows)
         except Exception as exc:
             log_event(logging.ERROR, "db_error", doc_id=document_id, error=str(exc))
