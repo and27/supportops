@@ -1,23 +1,33 @@
+import os
 import unittest
-from unittest.mock import patch
 
 from app.adapters.retriever_adapter import DefaultRetriever
 
 
+class StubKBRepo:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def search_by_tags(self, org_id: str, tags: list[str], limit: int):
+        self.calls.append("search_by_tags")
+        return []
+
+    def search_by_text(self, org_id: str, query: str, limit: int):
+        self.calls.append("search_by_text")
+        return [{"id": "k1", "title": "KB", "content": "Details"}]
+
+
 class RetrieverAdapterTests(unittest.TestCase):
-    def test_retriever_delegates_to_kb_retrieval(self) -> None:
+    def test_retriever_uses_kb_repo(self) -> None:
         supabase = object()
-        expected = ("reply", [{"kb_document_id": "k1"}], 0.9, {"source": "kb"})
-        with patch(
-            "app.adapters.retriever_adapter.retrieve_kb_reply",
-            return_value=expected,
-        ) as mocked:
-            retriever = DefaultRetriever(supabase)
+        kb_repo = StubKBRepo()
+        retriever = DefaultRetriever(supabase, kb_repo)
 
-            result = retriever.retrieve("hello", "org1")
+        os.environ["VECTOR_SEARCH_ENABLED"] = "false"
+        result = retriever.retrieve("integration docs", "org1")
 
-            self.assertEqual(result, expected)
-            mocked.assert_called_once_with(supabase, "hello", "org1")
+        self.assertIsNotNone(result)
+        self.assertIn("search_by_text", kb_repo.calls)
 
 
 if __name__ == "__main__":
