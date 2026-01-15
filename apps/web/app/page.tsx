@@ -11,6 +11,9 @@ type ChatMessage = {
   confidence?: number;
   ticket_id?: string | null;
   citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
+  decision_reason?: string | null;
+  decision_source?: string | null;
+  guardrail?: string | null;
 };
 
 type ConversationSummary = {
@@ -202,6 +205,9 @@ export default function Home() {
         confidence: number;
         ticket_id?: string | null;
         citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
+        decision_reason?: string | null;
+        decision_source?: string | null;
+        guardrail?: string | null;
       };
 
       setConversationId(data.conversation_id);
@@ -220,6 +226,9 @@ export default function Home() {
           confidence: data.confidence,
           ticket_id: data.ticket_id ?? null,
           citations: data.citations ?? null,
+          decision_reason: data.decision_reason ?? null,
+          decision_source: data.decision_source ?? null,
+          guardrail: data.guardrail ?? null,
         },
       ]);
       await loadConversations();
@@ -298,6 +307,15 @@ export default function Home() {
                           <span>Action: {message.action}</span>
                           {confidence !== null && (
                             <span>Confidence: {confidence}%</span>
+                          )}
+                          {message.decision_source && (
+                            <span>Decision: {message.decision_source}</span>
+                          )}
+                          {message.decision_reason && (
+                            <span>Reason: {message.decision_reason}</span>
+                          )}
+                          {message.guardrail && (
+                            <span>Guardrail: {message.guardrail}</span>
                           )}
                           {message.ticket_id && (
                             <Link
