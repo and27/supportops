@@ -26,6 +26,7 @@ runtime should orchestrate decisions while storage and retrieval are pluggable.
 - Service layer returns plain data dicts (no DB client objects).
 - Adapters may use DB-specific features, but must keep outputs consistent.
 - Retrieval returns `(reply, citations, confidence, metadata)` as a stable tuple.
+- Retriever selection is controlled by `RETRIEVER_ENGINE` (default: `default`).
 
 ## Adapter Tests
 

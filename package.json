@@ -4,6 +4,7 @@
   "packageManager": "pnpm@9",
   "scripts": {
     "dev:web": "pnpm --filter web dev",
-    "dev:agent": "pnpm --filter agent dev"
+    "dev:agent": "pnpm --filter agent dev",
+    "test:agent": "cd services/agent && set PYTHONPATH=. && python -m unittest discover tests"
   }
 }

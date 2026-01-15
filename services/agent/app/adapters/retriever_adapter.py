@@ -137,4 +137,8 @@ class DefaultRetriever(Retriever):
 
 
 def get_retriever(supabase, kb_repo: KBRepo) -> Retriever:
+    engine = os.getenv("RETRIEVER_ENGINE", "default").lower()
+    if engine == "default":
+        return DefaultRetriever(supabase, kb_repo)
+    log_event(logging.WARNING, "retriever_engine_unknown", engine=engine)
     return DefaultRetriever(supabase, kb_repo)
