@@ -7,6 +7,8 @@ import requests
 BASE_URL = os.getenv("AGENT_API_BASE_URL", "http://localhost:8000")
 ALLOWED_ACTIONS = {"reply", "ask_clarifying", "create_ticket", "escalate"}
 VECTOR_EVALS = os.getenv("VECTOR_EVALS", "false").lower() == "true"
+EVAL_ORG_SLUG = os.getenv("EVAL_ORG_SLUG", "eval")
+EVAL_ORG_NAME = os.getenv("EVAL_ORG_NAME", "Eval Org")
 
 
 def load_cases() -> list[dict]:
@@ -21,7 +23,24 @@ def load_cases() -> list[dict]:
     return cases
 
 
-def seed_kb() -> None:
+def ensure_eval_org() -> str:
+    response = requests.get(f"{BASE_URL}/v1/orgs", timeout=10)
+    assert response.status_code == 200, response.text
+    orgs = response.json() if isinstance(response.json(), list) else []
+    for org in orgs:
+        if org.get("slug") == EVAL_ORG_SLUG:
+            return org.get("id")
+    create = requests.post(
+        f"{BASE_URL}/v1/orgs",
+        json={"name": EVAL_ORG_NAME, "slug": EVAL_ORG_SLUG},
+        timeout=10,
+    )
+    assert create.status_code == 201, create.text
+    payload = create.json()
+    return payload.get("id")
+
+
+def seed_kb(org_id: str) -> None:
     docs = [
         {
             "title": "Password reset",
@@ -36,7 +55,9 @@ def seed_kb() -> None:
     ]
 
     for doc in docs:
-        response = requests.post(f"{BASE_URL}/v1/kb", json=doc, timeout=10)
+        payload = dict(doc)
+        payload["org_id"] = org_id
+        response = requests.post(f"{BASE_URL}/v1/kb", json=payload, timeout=10)
         assert response.status_code == 201, response.text
 
 
@@ -50,10 +71,12 @@ def test_health() -> None:
 def test_chat_cases() -> None:
     cases = load_cases()
     assert len(cases) >= 10
-    seed_kb()
+    eval_org_id = ensure_eval_org()
+    seed_kb(eval_org_id)
 
     for case in cases:
-        payload = case["input"]
+        payload = dict(case["input"])
+        payload["org_id"] = eval_org_id
         expected = case.get("expect", {})
         if expected.get("requires_vector") and not VECTOR_EVALS:
             continue

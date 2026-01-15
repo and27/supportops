@@ -9,6 +9,8 @@ BASE_URL = os.getenv("AGENT_API_BASE_URL", "http://localhost:8000")
 ALLOWED_ACTIONS = {"reply", "ask_clarifying", "create_ticket", "escalate"}
 VECTOR_EVALS = os.getenv("VECTOR_EVALS", "false").lower() == "true"
 THRESHOLDS_PATH = Path(__file__).resolve().parent / "thresholds.json"
+EVAL_ORG_SLUG = os.getenv("EVAL_ORG_SLUG", "eval")
+EVAL_ORG_NAME = os.getenv("EVAL_ORG_NAME", "Eval Org")
 
 
 def load_cases() -> list[dict]:
@@ -32,6 +34,23 @@ def load_thresholds() -> dict[str, dict[str, float]]:
     return {"default": {"min_action_accuracy": 0.85, "min_citation_rate": 1.0}}
 
 
+def ensure_eval_org() -> str:
+    response = requests.get(f"{BASE_URL}/v1/orgs", timeout=10)
+    response.raise_for_status()
+    orgs = response.json() if isinstance(response.json(), list) else []
+    for org in orgs:
+        if org.get("slug") == EVAL_ORG_SLUG:
+            return org.get("id")
+    create = requests.post(
+        f"{BASE_URL}/v1/orgs",
+        json={"name": EVAL_ORG_NAME, "slug": EVAL_ORG_SLUG},
+        timeout=10,
+    )
+    create.raise_for_status()
+    payload = create.json()
+    return payload.get("id")
+
+
 def get_category_stats(stats: dict, category: str) -> dict:
     if category not in stats:
         stats[category] = {
@@ -46,7 +65,7 @@ def get_category_stats(stats: dict, category: str) -> dict:
     return stats[category]
 
 
-def seed_kb() -> None:
+def seed_kb(org_id: str) -> None:
     docs = [
         {
             "title": "Password reset",
@@ -61,7 +80,9 @@ def seed_kb() -> None:
     ]
 
     for doc in docs:
-        response = requests.post(f"{BASE_URL}/v1/kb", json=doc, timeout=10)
+        payload = dict(doc)
+        payload["org_id"] = org_id
+        response = requests.post(f"{BASE_URL}/v1/kb", json=payload, timeout=10)
         response.raise_for_status()
 
 
@@ -79,13 +100,15 @@ def run() -> int:
         return 2
 
     try:
-        seed_kb()
+        eval_org_id = ensure_eval_org()
+        seed_kb(eval_org_id)
     except Exception as exc:
         print(f"KB seed failed: {exc}")
         return 2
 
     for index, case in enumerate(cases, start=1):
         payload = dict(case["input"])
+        payload["org_id"] = eval_org_id
         expected = case.get("expect", {})
         category = case.get("category") or "uncategorized"
         category_stats = get_category_stats(stats, category)
