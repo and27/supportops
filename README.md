@@ -98,6 +98,8 @@ and optional citation/hand-off rates). `run_eval.py` prints a category summary
 and fails if any threshold is missed.
 CI runs `python packages/eval/run_eval.py` and requires `AGENT_API_BASE_URL` as a
 repo secret pointing at a reachable agent environment.
+The eval runner creates/uses an org with slug `eval` (configurable via
+`EVAL_ORG_SLUG`) and seeds KB data into that org to avoid cross-contamination.
 
 ### 5) Seed KB fixtures (optional)
 
