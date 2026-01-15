@@ -17,15 +17,15 @@ This roadmap tracks the learning-focused agent system work. It is not user-facin
   - Action accuracy hooks (`eval_action_result`)
   - Conversation context appended for follow-up questions
   - Conversation persistence: list recent conversations + rehydrate messages in UI
+- Epic 3: Eval Gates (CI)
+  - Expanded eval set with categories
+  - Per-category thresholds in `packages/eval/thresholds.json`
+  - Runner reports category metrics and enforces thresholds
+  - CI workflow runs `run_eval.py`
 
 ## In Progress / Next
 
-### Epic 3: Eval Gates (CI)
-- Expand eval set to 30-50 cases, categorize
-- Add regression thresholds by category
-- CI gate that fails on threshold drop
-
-### Epic 4: Retrieval v2 (Top‑k + Thresholds)
+### Epic 4: Retrieval v2 (Top-k + Thresholds)
 - Parameterize per org: `VECTOR_MATCH_COUNT`, `VECTOR_MIN_SIMILARITY`, `REPLY_MIN_SIMILARITY`
 - A/B compare configs (citation relevance + action accuracy + escalation rate)
 - Logging dashboard for threshold experiments

@@ -93,6 +93,11 @@ python run_eval.py
 ```
 
 When running evals, the agent logs `eval_action_result` to track action accuracy by category.
+`packages/eval/thresholds.json` defines per-category thresholds (action accuracy,
+and optional citation/hand-off rates). `run_eval.py` prints a category summary
+and fails if any threshold is missed.
+CI runs `python packages/eval/run_eval.py` and requires `AGENT_API_BASE_URL` as a
+repo secret pointing at a reachable agent environment.
 
 ### 5) Seed KB fixtures (optional)
 
