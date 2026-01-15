@@ -8,6 +8,7 @@ import requests
 BASE_URL = os.getenv("AGENT_API_BASE_URL", "http://localhost:8000")
 ALLOWED_ACTIONS = {"reply", "ask_clarifying", "create_ticket", "escalate"}
 VECTOR_EVALS = os.getenv("VECTOR_EVALS", "false").lower() == "true"
+THRESHOLDS_PATH = Path(__file__).resolve().parent / "thresholds.json"
 
 
 def load_cases() -> list[dict]:
@@ -20,6 +21,29 @@ def load_cases() -> list[dict]:
                 continue
             cases.append(json.loads(line))
     return cases
+
+
+def load_thresholds() -> dict[str, dict[str, float]]:
+    if THRESHOLDS_PATH.exists():
+        with THRESHOLDS_PATH.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            return data
+    return {"default": {"min_action_accuracy": 0.85, "min_citation_rate": 1.0}}
+
+
+def get_category_stats(stats: dict, category: str) -> dict:
+    if category not in stats:
+        stats[category] = {
+            "total": 0,
+            "skipped": 0,
+            "action_total": 0,
+            "action_correct": 0,
+            "citation_total": 0,
+            "citation_correct": 0,
+            "handoff_total": 0,
+        }
+    return stats[category]
 
 
 def seed_kb() -> None:
@@ -44,6 +68,8 @@ def seed_kb() -> None:
 def run() -> int:
     cases = load_cases()
     failures = 0
+    thresholds = load_thresholds()
+    stats: dict[str, dict[str, int]] = {}
 
     try:
         health = requests.get(f"{BASE_URL}/health", timeout=5)
@@ -61,74 +87,132 @@ def run() -> int:
     for index, case in enumerate(cases, start=1):
         payload = dict(case["input"])
         expected = case.get("expect", {})
-        if expected.get("requires_vector") and not VECTOR_EVALS:
+        category = case.get("category") or "uncategorized"
+        category_stats = get_category_stats(stats, category)
+        requires_vector = expected.get("requires_vector")
+        if requires_vector and not VECTOR_EVALS:
+            category_stats["skipped"] += 1
             print(f"[{index}] SKIP (vector evals disabled)")
             continue
 
         expected_action = expected.get("action")
+        if expected_action:
+            category_stats["action_total"] += 1
+        expect_citation = expected.get("expect_citation") and (
+            not requires_vector or VECTOR_EVALS
+        )
+        if expect_citation:
+            category_stats["citation_total"] += 1
+        category_stats["total"] += 1
         if expected_action:
             metadata = payload.get("metadata")
             if not isinstance(metadata, dict):
                 metadata = {}
             metadata["eval"] = {
                 "expected_action": expected_action,
-                "category": case.get("category") or "uncategorized",
+                "category": category,
             }
             payload["metadata"] = metadata
 
+        error = None
+        data = None
+        action = None
         try:
             response = requests.post(
                 f"{BASE_URL}/v1/chat", json=payload, timeout=10
             )
             response.raise_for_status()
         except Exception as exc:
-            failures += 1
-            print(f"[{index}] Request failed: {exc}")
-            continue
-
-        data = response.json()
-        missing = {"conversation_id", "reply", "action", "confidence"} - data.keys()
-        if missing:
-            failures += 1
-            print(f"[{index}] Missing fields: {missing}")
-            continue
-
-        if data["action"] not in ALLOWED_ACTIONS:
-            failures += 1
-            print(f"[{index}] Invalid action: {data['action']}")
-            continue
-
-        if data["action"] == "create_ticket":
+            error = f"Request failed: {exc}"
+        if not error:
+            data = response.json()
+            missing = {"conversation_id", "reply", "action", "confidence"} - data.keys()
+            if missing:
+                error = f"Missing fields: {missing}"
+        if not error:
+            action = data.get("action")
+            if action not in ALLOWED_ACTIONS:
+                error = f"Invalid action: {action}"
+        if not error and action == "create_ticket":
             ticket_id = data.get("ticket_id")
             if not isinstance(ticket_id, str) or not ticket_id:
-                failures += 1
-                print(f"[{index}] Missing ticket_id for create_ticket")
-                continue
-
-        if expected.get("expect_citation") and (not expected.get("requires_vector") or VECTOR_EVALS):
-            citations = data.get("citations")
-            if not isinstance(citations, list) or not citations:
-                failures += 1
-                print(f"[{index}] Missing citations for KB response")
-                continue
-
-        confidence = data.get("confidence", -1)
-        if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+                error = "Missing ticket_id for create_ticket"
+        if not error and expect_citation:
+            citations = data.get("citations") if isinstance(data, dict) else None
+            if isinstance(citations, list) and citations:
+                category_stats["citation_correct"] += 1
+            else:
+                error = "Missing citations for KB response"
+        if not error:
+            confidence = data.get("confidence", -1)
+            if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+                error = f"Confidence out of range: {confidence}"
+        if expected_action and action == expected_action:
+            category_stats["action_correct"] += 1
+        if action in {"create_ticket", "escalate"}:
+            category_stats["handoff_total"] += 1
+        if not error and expected_action and action != expected_action:
+            error = f"Expected action {expected_action}, got {action}"
+        if error:
             failures += 1
-            print(f"[{index}] Confidence out of range: {confidence}")
+            print(f"[{index}] {error}")
+        else:
+            print(f"[{index}] OK")
+
+    threshold_failures = []
+    print("\nCategory summary:")
+    for category, category_stats in sorted(stats.items()):
+        total = category_stats["total"]
+        skipped = category_stats["skipped"]
+        action_total = category_stats["action_total"]
+        citation_total = category_stats["citation_total"]
+        if total == 0:
             continue
+        action_accuracy = (
+            category_stats["action_correct"] / action_total if action_total else 0.0
+        )
+        citation_rate = (
+            category_stats["citation_correct"] / citation_total
+            if citation_total
+            else None
+        )
+        handoff_rate = category_stats["handoff_total"] / total
+        print(
+            f"- {category}: total={total}, skipped={skipped}, "
+            f"action_acc={action_accuracy:.2f}, "
+            f"citation_rate={'n/a' if citation_rate is None else f'{citation_rate:.2f}'}, "
+            f"handoff_rate={handoff_rate:.2f}"
+        )
+        thresholds_for_category = thresholds.get(
+            category, thresholds.get("default", {})
+        )
+        min_action_accuracy = thresholds_for_category.get("min_action_accuracy")
+        if min_action_accuracy is not None and action_total:
+            if action_accuracy < float(min_action_accuracy):
+                threshold_failures.append(
+                    f"{category}: action_accuracy {action_accuracy:.2f} < {min_action_accuracy}"
+                )
+        min_citation_rate = thresholds_for_category.get("min_citation_rate")
+        if min_citation_rate is not None and citation_rate is not None:
+            if citation_rate < float(min_citation_rate):
+                threshold_failures.append(
+                    f"{category}: citation_rate {citation_rate:.2f} < {min_citation_rate}"
+                )
+        max_handoff_rate = thresholds_for_category.get("max_handoff_rate")
+        if max_handoff_rate is not None:
+            if handoff_rate > float(max_handoff_rate):
+                threshold_failures.append(
+                    f"{category}: handoff_rate {handoff_rate:.2f} > {max_handoff_rate}"
+                )
 
-        if "action" in expected and data["action"] != expected["action"]:
-            failures += 1
-            print(
-                f"[{index}] Expected action {expected['action']}, got {data['action']}"
-            )
-            continue
+    if threshold_failures:
+        print("\nThreshold failures:")
+        for failure in threshold_failures:
+            print(f"- {failure}")
 
-        print(f"[{index}] OK")
-
-    if failures:
-        print(f"Eval failed with {failures} failure(s).")
+    if failures or threshold_failures:
+        total_failures = failures + len(threshold_failures)
+        print(f"\nEval failed with {total_failures} failure(s).")
         return 1
 
     print("Eval passed.")

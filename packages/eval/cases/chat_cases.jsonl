@@ -1,14 +1,33 @@
-{"input":{"channel":"web","message":"Help please"},"expect":{"action":"ask_clarifying"}}
-{"input":{"channel":"web","message":"Need assistance"},"expect":{"action":"ask_clarifying"}}
-{"input":{"channel":"web","message":"Forgot my password and cannot access the portal"},"expect":{"action":"reply"}}
-{"input":{"channel":"web","message":"Payment page error when submitting"},"expect":{"action":"create_ticket"}}
-{"input":{"channel":"web","message":"App crash on startup after update"},"expect":{"action":"create_ticket"}}
-{"input":{"channel":"web","message":"Outage in dashboard"},"expect":{"action":"create_ticket"}}
-{"input":{"channel":"web","message":"Where can I update billing details"},"expect":{"action":"reply"}}
-{"input":{"channel":"web","message":"status page"},"expect":{"action":"ask_clarifying"}}
-{"input":{"channel":"web","message":"Login issue with MFA"},"expect":{"action":"create_ticket"}}
-{"input":{"channel":"web","message":"Need guidance on integrations setup"},"expect":{"action":"ask_clarifying"}}
-{"input":{"channel":"web","message":"#reset password help"},"expect":{"action":"reply","expect_citation":true}}
-{"input":{"channel":"web","message":"#billing update card"},"expect":{"action":"reply","expect_citation":true}}
-{"input":{"channel":"web","message":"How do I reset my password?"},"expect":{"action":"reply","expect_citation":true,"requires_vector":true}}
-{"input":{"channel":"web","message":"Where can I change my credit card?"},"expect":{"action":"reply","expect_citation":true,"requires_vector":true}}
+{"input":{"channel":"web","message":"Help please"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Need assistance"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Forgot my password and cannot access the portal"},"expect":{"action":"reply","expect_citation":true},"category":"auth"}
+{"input":{"channel":"web","message":"Payment page error when submitting"},"expect":{"action":"create_ticket"},"category":"bug"}
+{"input":{"channel":"web","message":"App crash on startup after update"},"expect":{"action":"create_ticket"},"category":"bug"}
+{"input":{"channel":"web","message":"Outage in dashboard"},"expect":{"action":"create_ticket"},"category":"outage"}
+{"input":{"channel":"web","message":"Where can I update billing details"},"expect":{"action":"reply","expect_citation":true},"category":"billing"}
+{"input":{"channel":"web","message":"status page"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Login issue with MFA"},"expect":{"action":"create_ticket"},"category":"bug"}
+{"input":{"channel":"web","message":"Need guidance on integrations setup"},"expect":{"action":"ask_clarifying"},"category":"integrations"}
+{"input":{"channel":"web","message":"#reset password help"},"expect":{"action":"reply","expect_citation":true},"category":"auth"}
+{"input":{"channel":"web","message":"#billing update card"},"expect":{"action":"reply","expect_citation":true},"category":"billing"}
+{"input":{"channel":"web","message":"How do I reset my password?"},"expect":{"action":"reply","expect_citation":true,"requires_vector":true},"category":"auth"}
+{"input":{"channel":"web","message":"Where can I change my credit card?"},"expect":{"action":"reply","expect_citation":true,"requires_vector":true},"category":"billing"}
+{"input":{"channel":"web","message":"Help"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Need help"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"pricing"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Hi"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Where?"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Reset?"},"expect":{"action":"ask_clarifying"},"category":"clarify"}
+{"input":{"channel":"web","message":"Bug: settings page fails to load"},"expect":{"action":"create_ticket"},"category":"bug"}
+{"input":{"channel":"web","message":"Incident: dashboard outage"},"expect":{"action":"create_ticket"},"category":"outage"}
+{"input":{"channel":"web","message":"Error 500 in billing screen"},"expect":{"action":"create_ticket"},"category":"bug"}
+{"input":{"channel":"web","message":"How do I update billing card"},"expect":{"action":"reply","expect_citation":true},"category":"billing"}
+{"input":{"channel":"web","message":"Need billing update instructions"},"expect":{"action":"reply","expect_citation":true},"category":"billing"}
+{"input":{"channel":"web","message":"Change credit card on billing page"},"expect":{"action":"reply","expect_citation":true},"category":"billing"}
+{"input":{"channel":"web","message":"Billing details change in settings"},"expect":{"action":"reply","expect_citation":true},"category":"billing"}
+{"input":{"channel":"web","message":"Reset password for my account"},"expect":{"action":"reply","expect_citation":true},"category":"auth"}
+{"input":{"channel":"web","message":"Password reset not working"},"expect":{"action":"reply","expect_citation":true},"category":"auth"}
+{"input":{"channel":"web","message":"Cannot reset password email"},"expect":{"action":"reply","expect_citation":true},"category":"auth"}
+{"input":{"channel":"web","message":"Integrations question"},"expect":{"action":"ask_clarifying"},"category":"integrations"}
+{"input":{"channel":"web","message":"API integration help"},"expect":{"action":"ask_clarifying"},"category":"integrations"}
+{"input":{"channel":"web","message":"Setting up webhooks integration"},"expect":{"action":"ask_clarifying"},"category":"integrations"}

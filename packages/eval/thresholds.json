@@ -1,0 +1,25 @@
+{
+  "default": {
+    "min_action_accuracy": 0.85
+  },
+  "clarify": {
+    "min_action_accuracy": 0.9
+  },
+  "auth": {
+    "min_action_accuracy": 0.85,
+    "min_citation_rate": 1.0
+  },
+  "billing": {
+    "min_action_accuracy": 0.85,
+    "min_citation_rate": 1.0
+  },
+  "bug": {
+    "min_action_accuracy": 0.85
+  },
+  "outage": {
+    "min_action_accuracy": 0.85
+  },
+  "integrations": {
+    "min_action_accuracy": 0.85
+  }
+}
