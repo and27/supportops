@@ -16,6 +16,12 @@ from .context_utils import build_context, load_recent_messages
 from .embeddings import get_embedding_provider
 from .ingest import get_ingest_config, run_ingest
 from .logging_utils import log_event
+from .adapters.supabase_repos import (
+    SupabaseConversationsRepo,
+    SupabaseMessagesRepo,
+    SupabaseRunsRepo,
+    SupabaseTicketsRepo,
+)
 from .orgs import (
     ensure_admin_access,
     ensure_write_access,
@@ -96,6 +102,10 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     user_id = auth_user_id or payload.user_id
     conversation_id = payload.conversation_id or str(uuid.uuid4())
     input_length_chars = len(payload.message or "")
+    conversations_repo = SupabaseConversationsRepo(supabase)
+    messages_repo = SupabaseMessagesRepo(supabase)
+    tickets_repo = SupabaseTicketsRepo(supabase)
+    runs_repo = SupabaseRunsRepo(supabase)
 
     log_event(
         logging.INFO,
@@ -116,7 +126,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
     try:
         if payload.conversation_id is None:
-            supabase.table("conversations").insert(
+            conversations_repo.create_conversation(
                 {
                     "id": conversation_id,
                     "org_id": org_id,
@@ -124,7 +134,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                     "channel": payload.channel,
                     "metadata": payload.metadata,
                 }
-            ).execute()
+            )
 
         context_message_limit = int(os.getenv("CONTEXT_MESSAGE_LIMIT", "6"))
         context_max_chars = int(os.getenv("CONTEXT_MAX_CHARS", "1200"))
@@ -136,13 +146,13 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             )
             context_text = build_context(prior_messages, context_max_chars)
 
-        supabase.table("messages").insert(
+        messages_repo.create_message(
             {
                 "conversation_id": conversation_id,
                 "role": "user",
                 "content": payload.message,
             }
-        ).execute()
+        )
 
         kb_reply = None
         citations = None
@@ -271,26 +281,26 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             )
         ticket_id = None
         if action in ("create_ticket", "escalate"):
-            ticket_result = supabase.table("tickets").insert(
+            ticket_result = tickets_repo.create_ticket(
                 {
                     "org_id": org_id,
                     "conversation_id": conversation_id,
                     "subject": payload.message[:160],
                 }
-            ).execute()
-            if ticket_result.data:
-                ticket_id = ticket_result.data[0].get("id")
+            )
+            if ticket_result:
+                ticket_id = ticket_result.get("id")
             if not ticket_id:
                 raise RuntimeError("ticket_insert_failed")
 
-        supabase.table("messages").insert(
+        messages_repo.create_message(
             {
                 "conversation_id": conversation_id,
                 "role": "assistant",
                 "content": reply,
                 "metadata": {"citations": citations} if citations else None,
             }
-        ).execute()
+        )
 
         latency_ms = int((perf_counter() - start_time) * 1000)
         response_tokens_estimated = int(len(reply or "") / 4)
@@ -324,7 +334,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             "guardrail": guardrail_reason,
         }
         try:
-            supabase.table("agent_runs").insert(
+            runs_repo.create_run(
                 {
                     "org_id": org_id,
                     "conversation_id": conversation_id,
@@ -336,7 +346,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                     "latency_ms": latency_ms,
                     "metadata": run_metadata,
                 }
-            ).execute()
+            )
         except Exception as exc:
             log_event(
                 logging.WARNING,
