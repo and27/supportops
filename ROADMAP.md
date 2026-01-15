@@ -33,11 +33,10 @@ This roadmap tracks the learning-focused agent system work. It is not user-facin
 - DTOs/ports to keep HTTP/DB boundaries clean
 - Add integration tests for repo adapters
 
-### Epic 5: Storage Adapter v2 (Postgres-ready)
-- Implement Postgres adapter (SQLAlchemy/psycopg) behind repo interfaces
-- Move RPC usage behind adapter (match_kb_chunks abstraction)
-- Parity test suite: Supabase vs Postgres adapter outputs
-- Migration guide for swapping storage
+### Epic 5: Storage Adapter Neutrality
+- Remove remaining direct Supabase usage outside adapters
+- Keep Supabase adapter as default implementation
+- Expand adapter contract tests for neutrality
 
 ### Epic 6: Retrieval Engine Adapter
 - Introduce `Retriever` interface (current RAG vs external engines)
