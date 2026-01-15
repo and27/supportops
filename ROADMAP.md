@@ -10,21 +10,18 @@ This roadmap tracks the learning-focused agent system work. It is not user-facin
   - `agent_runs` enriched with latency, retrieval_source, decision_source
   - Runs UI summary cards (action mix, latency, escalation rate, retrieval source)
   - Smoke checks documented
-- Epic 2 (partial): Decision layer + guardrails
+- Epic 2: Decision layer + guardrails
   - Guardrail: `reply` requires citations
   - Guardrail: `reply` blocked when vector `top_similarity < REPLY_MIN_SIMILARITY`
+  - Explicit `decision_reason` + guardrail logging
+  - Action accuracy hooks (`eval_action_result`)
   - Conversation context appended for follow-up questions
   - Conversation persistence: list recent conversations + rehydrate messages in UI
 
 ## In Progress / Next
 
-### Epic 2 (finish)
-- Add intent/action evaluation hooks (action accuracy by category)
-- Add decision_reason field (explicit reasoning code enum)
-- Merge run metadata into chat UI (show decision reason + guardrail)
-
 ### Epic 3: Eval Gates (CI)
-- Expand eval set to 30–50 cases, categorize
+- Expand eval set to 30-50 cases, categorize
 - Add regression thresholds by category
 - CI gate that fails on threshold drop
 

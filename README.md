@@ -92,6 +92,8 @@ pytest
 python run_eval.py
 ```
 
+When running evals, the agent logs `eval_action_result` to track action accuracy by category.
+
 ### 5) Seed KB fixtures (optional)
 
 ```bash
