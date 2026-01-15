@@ -59,11 +59,22 @@ def run() -> int:
         return 2
 
     for index, case in enumerate(cases, start=1):
-        payload = case["input"]
+        payload = dict(case["input"])
         expected = case.get("expect", {})
         if expected.get("requires_vector") and not VECTOR_EVALS:
             print(f"[{index}] SKIP (vector evals disabled)")
             continue
+
+        expected_action = expected.get("action")
+        if expected_action:
+            metadata = payload.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["eval"] = {
+                "expected_action": expected_action,
+                "category": case.get("category") or "uncategorized",
+            }
+            payload["metadata"] = metadata
 
         try:
             response = requests.post(
