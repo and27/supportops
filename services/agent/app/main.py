@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .auth_utils import auth_enabled, get_auth_user
@@ -866,6 +866,37 @@ async def update_kb(doc_id: str, payload: KBUpdate, request: Request) -> KBDocum
         log_event(logging.INFO, "auto_ingest_skipped", document_id=doc.get("id"))
 
     return KBDocument(**doc)
+
+
+@app.delete("/v1/kb/{doc_id}", status_code=204)
+async def delete_kb(doc_id: str, request: Request) -> Response:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, user_id = resolve_org_context(orgs_repo, members_repo, request)
+    ensure_write_access(request, members_repo, org_id, user_id)
+    kb_repo = SupabaseKBRepo(supabase)
+
+    try:
+        existing = kb_repo.get_document(doc_id)
+        if not existing or existing.get("org_id") != org_id:
+            raise HTTPException(status_code=404, detail="kb_not_found")
+        deleted = kb_repo.delete_document(doc_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=doc_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not deleted:
+        raise HTTPException(status_code=500, detail="kb_delete_failed")
+
+    return Response(status_code=204)
 
 
 @app.post("/v1/ingest", response_model=IngestResponse)
