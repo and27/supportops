@@ -1,5 +1,5 @@
-import os
 import unittest
+from unittest.mock import patch
 
 from app.adapters.retriever_adapter import DefaultRetriever, get_retriever
 
@@ -23,8 +23,8 @@ class RetrieverAdapterTests(unittest.TestCase):
         kb_repo = StubKBRepo()
         retriever = DefaultRetriever(supabase, kb_repo)
 
-        os.environ["VECTOR_SEARCH_ENABLED"] = "false"
-        result = retriever.retrieve("integration docs", "org1")
+        with patch.dict("os.environ", {"VECTOR_SEARCH_ENABLED": "false"}, clear=False):
+            result = retriever.retrieve("integration docs", "org1")
 
         self.assertIsNotNone(result)
         self.assertIn("search_by_text", kb_repo.calls)
@@ -32,9 +32,8 @@ class RetrieverAdapterTests(unittest.TestCase):
     def test_llamaindex_engine_falls_back(self) -> None:
         supabase = object()
         kb_repo = StubKBRepo()
-        os.environ["RETRIEVER_ENGINE"] = "llamaindex"
-
-        retriever = get_retriever(supabase, kb_repo)
+        with patch.dict("os.environ", {"RETRIEVER_ENGINE": "llamaindex"}, clear=False):
+            retriever = get_retriever(supabase, kb_repo)
 
         self.assertIsInstance(retriever, DefaultRetriever)
 
