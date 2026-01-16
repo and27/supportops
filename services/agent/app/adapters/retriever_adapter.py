@@ -110,12 +110,21 @@ class DefaultRetriever(Retriever):
                 .execute()
             )
             data = result.data or []
-            top_similarity = data[0].get("similarity") if data else None
+            similarities = [
+                row.get("similarity")
+                for row in data
+                if isinstance(row.get("similarity"), (int, float))
+            ]
+            top_similarity = similarities[0] if similarities else None
+            p50 = percentile(similarities, 50)
+            p90 = percentile(similarities, 90)
             log_event(
                 logging.INFO,
                 "kb_vector_matches",
                 count=len(data),
                 top_similarity=top_similarity,
+                similarity_p50=p50,
+                similarity_p90=p90,
                 min_similarity=min_similarity,
             )
             if not data:
@@ -129,6 +138,8 @@ class DefaultRetriever(Retriever):
                     "retrieval_source": "vector",
                     "match_count": len(data),
                     "top_similarity": top_similarity,
+                    "similarity_p50": p50,
+                    "similarity_p90": p90,
                     "min_similarity": min_similarity,
                 },
             )
@@ -150,3 +161,15 @@ def get_retriever(supabase, kb_repo: KBRepo) -> Retriever:
             return DefaultRetriever(supabase, kb_repo)
     log_event(logging.WARNING, "retriever_engine_unknown", engine=engine)
     return DefaultRetriever(supabase, kb_repo)
+
+
+def percentile(values: list[float], pct: int) -> float | None:
+    if not values:
+        return None
+    if pct <= 0:
+        return min(values)
+    if pct >= 100:
+        return max(values)
+    sorted_values = sorted(values)
+    index = int(round((pct / 100) * (len(sorted_values) - 1)))
+    return sorted_values[index]
