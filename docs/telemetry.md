@@ -16,6 +16,8 @@ All canonical events include:
 - retrieval_ms
 - retrieval_candidates_count
 - top_similarity
+- similarity_p50
+- similarity_p90
 - retrieval_source
 
 ### decision_made
