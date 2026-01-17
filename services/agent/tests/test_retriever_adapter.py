@@ -29,7 +29,7 @@ class RetrieverAdapterTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn("search_by_text", kb_repo.calls)
 
-    def test_llamaindex_engine_falls_back(self) -> None:
+    def test_deprecated_retriever_engine_is_ignored(self) -> None:
         supabase = object()
         kb_repo = StubKBRepo()
         with patch.dict("os.environ", {"RETRIEVER_ENGINE": "llamaindex"}, clear=False):

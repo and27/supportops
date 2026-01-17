@@ -7,7 +7,6 @@ from typing import Any
 from ..embeddings import get_embedding_provider
 from ..logging_utils import log_event
 from ..ports import KBRepo, Retriever
-from .llamaindex_retriever import LlamaIndexRetriever
 from ..retrieval import (
     build_kb_chunk_reply,
     build_kb_reply,
@@ -150,16 +149,8 @@ class DefaultRetriever(Retriever):
 
 def get_retriever(supabase, kb_repo: KBRepo) -> Retriever:
     engine = os.getenv("RETRIEVER_ENGINE", "default").lower()
-    if engine == "default":
-        return DefaultRetriever(supabase, kb_repo)
-    if engine == "llamaindex":
-        try:
-            docs = kb_repo.list_documents(os.getenv("DEFAULT_ORG_ID", ""), 200)
-            return LlamaIndexRetriever(docs)
-        except Exception as exc:
-            log_event(logging.WARNING, "retriever_engine_failed", engine=engine, error=str(exc))
-            return DefaultRetriever(supabase, kb_repo)
-    log_event(logging.WARNING, "retriever_engine_unknown", engine=engine)
+    if engine and engine != "default":
+        log_event(logging.WARNING, "retriever_engine_deprecated", engine=engine)
     return DefaultRetriever(supabase, kb_repo)
 
 
