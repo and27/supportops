@@ -60,6 +60,8 @@ load_dotenv(agent_root / ".env.local", override=True)
 
 app = FastAPI()
 
+CLARIFY_PROMPT = "Can you add more context (account, steps, and expected behavior)?"
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
@@ -171,12 +173,29 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         guardrail_reason = None
         decision_reason: str | None = None
         decision_message = payload.message
+        retrieval_query = payload.message
         retrieval_ms = 0
         if context_text:
             decision_message = f"{context_text}\nuser: {payload.message}"
             run_metadata["context_messages"] = len(prior_messages)
             run_metadata["context_chars"] = len(context_text)
             run_metadata["context_used"] = True
+            user_context = [
+                message.get("content", "").strip()
+                for message in prior_messages
+                if message.get("role") == "user" and message.get("content")
+            ]
+            last_assistant = next(
+                (
+                    message.get("content", "").strip()
+                    for message in reversed(prior_messages)
+                    if message.get("role") == "assistant"
+                ),
+                "",
+            )
+            if last_assistant == CLARIFY_PROMPT and user_context:
+                recent_users = user_context[-2:]
+                retrieval_query = "\n".join(recent_users + [payload.message]).strip()
         else:
             run_metadata["context_used"] = False
 
@@ -187,7 +206,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             run_metadata["decision_source"] = "precheck"
         else:
             retrieval_start = perf_counter()
-            kb_reply = retriever.retrieve(decision_message, org_id)
+            kb_reply = retriever.retrieve(retrieval_query, org_id)
             retrieval_ms = int((perf_counter() - retrieval_start) * 1000)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
@@ -233,9 +252,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 run_metadata["decision_reason_original"] = decision_reason
                 action = "ask_clarifying"
                 confidence = min(confidence, 0.4)
-                reply = (
-                    "Can you add more context (account, steps, and expected behavior)?"
-                )
+                reply = CLARIFY_PROMPT
                 citations = None
                 run_metadata["decision_source"] = "guardrail"
                 decision_reason = "guardrail_low_similarity"
@@ -246,9 +263,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             run_metadata["decision_reason_original"] = decision_reason
             action = "ask_clarifying"
             confidence = min(confidence, 0.4)
-            reply = (
-                "Can you add more context (account, steps, and expected behavior)?"
-            )
+            reply = CLARIFY_PROMPT
             citations = None
             run_metadata["decision_source"] = "guardrail"
             decision_reason = "guardrail_missing_citations"
