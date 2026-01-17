@@ -16,6 +16,7 @@ from .context_utils import build_context, load_recent_messages
 from .embeddings import get_embedding_provider
 from .ingest import get_ingest_config, run_ingest
 from .logging_utils import log_event
+from .prompts import get_clarify_prompt
 from .adapters.retriever_adapter import get_retriever
 from .adapters.supabase_repos import (
     SupabaseConversationsRepo,
@@ -59,8 +60,6 @@ load_dotenv(agent_root / ".env", override=False)
 load_dotenv(agent_root / ".env.local", override=True)
 
 app = FastAPI()
-
-CLARIFY_PROMPT = "Can you add more context (account, steps, and expected behavior)?"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -206,7 +205,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             run_metadata["decision_source"] = "precheck"
         else:
             retrieval_start = perf_counter()
-            kb_reply = retriever.retrieve(retrieval_query, org_id)
+            kb_reply = retriever.retrieve(retrieval_query, org_id, conversation_id)
             retrieval_ms = int((perf_counter() - retrieval_start) * 1000)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
@@ -243,6 +242,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         )
         reply_min_similarity = float(os.getenv("REPLY_MIN_SIMILARITY", "0.35"))
         if action == "reply" and run_metadata.get("retrieval_source") == "vector":
+            clarify_prompt = get_clarify_prompt()
             run_metadata["reply_min_similarity"] = reply_min_similarity
             top_similarity = run_metadata.get("top_similarity")
             if isinstance(top_similarity, (int, float)) and top_similarity < reply_min_similarity:
@@ -252,18 +252,19 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 run_metadata["decision_reason_original"] = decision_reason
                 action = "ask_clarifying"
                 confidence = min(confidence, 0.4)
-                reply = CLARIFY_PROMPT
+                reply = clarify_prompt
                 citations = None
                 run_metadata["decision_source"] = "guardrail"
                 decision_reason = "guardrail_low_similarity"
         if action == "reply" and not citations:
+            clarify_prompt = get_clarify_prompt()
             guardrail_reason = "missing_citations"
             run_metadata["guardrail"] = guardrail_reason
             run_metadata["guardrail_original_action"] = action
             run_metadata["decision_reason_original"] = decision_reason
             action = "ask_clarifying"
             confidence = min(confidence, 0.4)
-            reply = CLARIFY_PROMPT
+            reply = clarify_prompt
             citations = None
             run_metadata["decision_source"] = "guardrail"
             decision_reason = "guardrail_missing_citations"

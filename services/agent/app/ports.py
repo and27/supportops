@@ -100,5 +100,5 @@ class MembersRepo(Protocol):
 @runtime_checkable
 class Retriever(Protocol):
     def retrieve(
-        self, message: str, org_id: str | None
-    ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None: ...
+        self, message: str, org_id: str | None, trace_id: str | None = None
+    ) -> tuple[str, list[dict[str, Any]], float, dict[str, Any]] | None: ...

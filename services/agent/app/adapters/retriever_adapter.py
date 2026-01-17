@@ -24,7 +24,7 @@ class DefaultRetriever(Retriever):
 
     def retrieve(
         self, message: str, org_id: str | None, trace_id: str | None = None
-    ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
+    ) -> tuple[str, list[dict[str, Any]], float, dict[str, Any]] | None:
         query = message.strip().replace(",", " ")
         if not query:
             return None
@@ -83,7 +83,7 @@ class DefaultRetriever(Retriever):
 
     def _retrieve_vector(
         self, query: str, org_id: str | None, trace_id: str | None
-    ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
+    ) -> tuple[str, list[dict[str, Any]], float, dict[str, Any]] | None:
         enabled = os.getenv("VECTOR_SEARCH_ENABLED", "false").lower() == "true"
         if not enabled:
             return None
