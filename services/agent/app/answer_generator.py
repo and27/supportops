@@ -173,8 +173,9 @@ def call_chat_completions(
                 "llm_retry",
                 status_code=response.status_code,
                 attempt=attempt + 1,
+                trace_id=trace_id,
             )
-            time.sleep(backoff)
+            time.sleep(backoff * (0.5 + random.random()))
             backoff *= 2
             continue
         if response.status_code >= 400:
@@ -184,15 +185,28 @@ def call_chat_completions(
                 "llm_request_failed",
                 status_code=response.status_code,
                 body_snippet=snippet,
+                trace_id=trace_id,
             )
             response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            snippet = response.text[:300]
+            log_event(
+                logging.ERROR,
+                "llm_response_invalid_json",
+                status_code=response.status_code,
+                body_snippet=snippet,
+                trace_id=trace_id,
+            )
+            raise
         log_event(
             logging.INFO,
             "llm_request_finished",
             status_code=response.status_code,
             latency_ms=int((time.perf_counter() - start_time) * 1000),
             attempt=attempt + 1,
+            trace_id=trace_id,
         )
         return (
             (data.get("choices") or [{}])[0]
@@ -220,14 +234,18 @@ def build_context(
         if max_chars > 0 and len(content) > max_chars:
             content = f"{content[:max_chars].rstrip()}..."
         header = f"[chunk_id={chunk_id} doc_id={doc_id} source={source}]"
-        block = f"{header}\n{content}"
+        header_line = f"{header}\n"
+        block = f"{header_line}{content}"
         if total_max_chars > 0 and total_chars >= total_max_chars:
             break
         if total_max_chars > 0 and total_chars + len(block) > total_max_chars:
             remaining = total_max_chars - total_chars
             if remaining <= 0:
                 break
-            block = block[:remaining].rstrip()
+            if remaining <= len(header_line):
+                break
+            content_limit = remaining - len(header_line)
+            block = f"{header_line}{content[:content_limit].rstrip()}"
         parts.append(block)
         total_chars += len(block)
     return "\n\n".join(parts).strip(), total_chars
@@ -235,9 +253,9 @@ def build_context(
 
 def _fallback_answer(chunks: list[dict[str, Any]]) -> tuple[str, float, dict[str, Any]]:
     if not chunks:
-        return CLARIFY_PROMPT, 0.4, {"generation_source": "fallback"}
+        return get_clarify_prompt(), 0.4, {"generation_source": "fallback"}
     return (
-        CLARIFY_PROMPT,
+        get_clarify_prompt(),
         0.5,
         {"generation_source": "fallback"},
     )
@@ -260,10 +278,12 @@ def filter_chunks_by_org(
 ) -> list[dict[str, Any]]:
     if not org_id:
         return chunks
+    allow_global = os.getenv("ALLOW_GLOBAL_CHUNKS", "false").lower() == "true"
     filtered = [
         chunk
         for chunk in chunks
-        if chunk.get("org_id") in (None, org_id)
+        if chunk.get("org_id") == org_id
+        or (allow_global and chunk.get("org_id") is None)
     ]
     if len(filtered) != len(chunks):
         log_event(
@@ -300,8 +320,8 @@ def looks_uncertain(reply: str) -> bool:
         "not enough information",
         "no tengo suficiente",
         "no cuento con",
-        "no tengo información",
+        "no tengo informacion",
         "no dispongo de",
-        "necesito más contexto",
+        "necesito mas contexto",
     ]
     return any(trigger in lowered for trigger in triggers)
