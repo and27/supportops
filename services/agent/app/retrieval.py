@@ -3,13 +3,15 @@ import re
 from typing import Any
 
 from .logging_utils import log_event
+from .prompts import get_clarify_prompt
 
 
 def decide_response(message: str) -> tuple[str, str, float, str]:
     msg = message.strip().lower()
+    clarify_prompt = get_clarify_prompt()
     if not msg:
         return (
-            "Please share a bit more detail so I can help.",
+            clarify_prompt,
             "ask_clarifying",
             0.2,
             "heuristic_empty",
@@ -34,7 +36,7 @@ def decide_response(message: str) -> tuple[str, str, float, str]:
 
     if len(msg.split()) < 4:
         return (
-            "Can you add more context (account, steps, and expected behavior)?",
+            clarify_prompt,
             "ask_clarifying",
             0.45,
             "heuristic_short",
@@ -50,6 +52,7 @@ def decide_response(message: str) -> tuple[str, str, float, str]:
 
 def precheck_action(message: str) -> tuple[str, str, float, str] | None:
     msg = message.strip().lower()
+    clarify_prompt = get_clarify_prompt()
     tags = extract_hash_tags(msg)
     if "#" in msg:
         log_event(
@@ -60,7 +63,7 @@ def precheck_action(message: str) -> tuple[str, str, float, str] | None:
         )
     if not msg:  # empty or whitespace
         return (
-            "Please share a bit more detail so I can help.",
+            clarify_prompt,
             "ask_clarifying",
             0.2,
             "precheck_empty",
@@ -80,7 +83,7 @@ def precheck_action(message: str) -> tuple[str, str, float, str] | None:
 
     if len(msg.split()) < 4:
         return (
-            "Can you add more context (account, steps, and expected behavior)?",
+            clarify_prompt,
             "ask_clarifying",
             0.45,
             "precheck_short",
