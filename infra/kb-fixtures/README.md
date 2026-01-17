@@ -15,6 +15,12 @@ $env:AGENT_API_BASE_URL="http://localhost:8000"
 python seed_kb.py
 ```
 
+## Seed store example (Ferretería San Martín)
+```bash
+$env:AGENT_API_BASE_URL="http://localhost:8000"
+python seed_kb.py --file store_sanmartin.jsonl --ingest
+```
+
 ## Seed + ingest
 ```bash
 $env:AGENT_API_BASE_URL="http://localhost:8000"
