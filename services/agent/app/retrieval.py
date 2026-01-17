@@ -114,18 +114,18 @@ def extract_keywords(message: str) -> list[str]:
 
 
 
-def build_kb_reply(document: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+def build_kb_reply(document: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     title = document.get("title", "Knowledge Base")
     content = document.get("content", "")
     excerpt = content.strip().replace("\n", " ")
     if len(excerpt) > 360:
         excerpt = f"{excerpt[:360].rstrip()}..."
     reply = f"{title}: {excerpt}"
-    citations = [{"kb_document_id": document.get("id", "")}]
+    citations = [{"kb_document_id": document.get("id", ""), "source": title}]
     return reply, citations
 
 
-def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     title = chunk.get("document_title") or "Knowledge Base"
     content = chunk.get("content", "")
     excerpt = content.strip().replace("\n", " ")
@@ -136,7 +136,8 @@ def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, str
         {
             "kb_document_id": chunk.get("document_id", ""),
             "kb_chunk_id": chunk.get("id", ""),
+            "source": title,
+            "score": chunk.get("similarity"),
         }
     ]
     return reply, citations
-

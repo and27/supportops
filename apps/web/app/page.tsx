@@ -10,7 +10,12 @@ type ChatMessage = {
   action?: "reply" | "ask_clarifying" | "create_ticket" | "escalate";
   confidence?: number;
   ticket_id?: string | null;
-  citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
+  citations?: {
+    kb_document_id: string;
+    kb_chunk_id?: string;
+    source?: string;
+    score?: number;
+  }[] | null;
   decision_reason?: string | null;
   decision_source?: string | null;
   guardrail?: string | null;
@@ -204,7 +209,12 @@ export default function Home() {
         action: ChatMessage["action"];
         confidence: number;
         ticket_id?: string | null;
-        citations?: { kb_document_id: string; kb_chunk_id?: string }[] | null;
+        citations?: {
+          kb_document_id: string;
+          kb_chunk_id?: string;
+          source?: string;
+          score?: number;
+        }[] | null;
         decision_reason?: string | null;
         decision_source?: string | null;
         guardrail?: string | null;
