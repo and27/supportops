@@ -11,6 +11,7 @@ import requests
 from .logging_utils import log_event
 from .prompts import get_clarify_prompt
 RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_ALLOW_GLOBAL_LOGGED = False
 
 
 def generate_answer(
@@ -279,6 +280,14 @@ def filter_chunks_by_org(
     if not org_id:
         return chunks
     allow_global = os.getenv("ALLOW_GLOBAL_CHUNKS", "false").lower() == "true"
+    global _ALLOW_GLOBAL_LOGGED
+    if not _ALLOW_GLOBAL_LOGGED:
+        log_event(
+            logging.INFO,
+            "allow_global_chunks_config",
+            allow_global=allow_global,
+        )
+        _ALLOW_GLOBAL_LOGGED = True
     filtered = [
         chunk
         for chunk in chunks
@@ -292,6 +301,7 @@ def filter_chunks_by_org(
             org_id=org_id,
             kept=len(filtered),
             dropped=len(chunks) - len(filtered),
+            allow_global=allow_global,
         )
     return filtered
 

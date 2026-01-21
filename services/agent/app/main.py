@@ -174,6 +174,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         decision_message = payload.message
         retrieval_query = payload.message
         retrieval_ms = 0
+        clarify_prompt = get_clarify_prompt()
         if context_text:
             decision_message = f"{context_text}\nuser: {payload.message}"
             run_metadata["context_messages"] = len(prior_messages)
@@ -192,7 +193,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 ),
                 "",
             )
-            if last_assistant == CLARIFY_PROMPT and user_context:
+            if last_assistant == clarify_prompt and user_context:
                 recent_users = user_context[-2:]
                 retrieval_query = "\n".join(recent_users + [payload.message]).strip()
         else:
