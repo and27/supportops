@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .auth_utils import auth_enabled, get_auth_user
@@ -16,6 +16,7 @@ from .context_utils import build_context, load_recent_messages
 from .embeddings import get_embedding_provider
 from .ingest import get_ingest_config, run_ingest
 from .logging_utils import log_event
+from .prompts import get_clarify_prompt
 from .adapters.retriever_adapter import get_retriever
 from .adapters.supabase_repos import (
     SupabaseConversationsRepo,
@@ -171,12 +172,30 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         guardrail_reason = None
         decision_reason: str | None = None
         decision_message = payload.message
+        retrieval_query = payload.message
         retrieval_ms = 0
+        clarify_prompt = get_clarify_prompt()
         if context_text:
             decision_message = f"{context_text}\nuser: {payload.message}"
             run_metadata["context_messages"] = len(prior_messages)
             run_metadata["context_chars"] = len(context_text)
             run_metadata["context_used"] = True
+            user_context = [
+                message.get("content", "").strip()
+                for message in prior_messages
+                if message.get("role") == "user" and message.get("content")
+            ]
+            last_assistant = next(
+                (
+                    message.get("content", "").strip()
+                    for message in reversed(prior_messages)
+                    if message.get("role") == "assistant"
+                ),
+                "",
+            )
+            if last_assistant == clarify_prompt and user_context:
+                recent_users = user_context[-2:]
+                retrieval_query = "\n".join(recent_users + [payload.message]).strip()
         else:
             run_metadata["context_used"] = False
 
@@ -187,7 +206,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             run_metadata["decision_source"] = "precheck"
         else:
             retrieval_start = perf_counter()
-            kb_reply = retriever.retrieve(decision_message, org_id)
+            kb_reply = retriever.retrieve(retrieval_query, org_id, conversation_id)
             retrieval_ms = int((perf_counter() - retrieval_start) * 1000)
             if kb_reply:
                 reply, citations, confidence, run_metadata = kb_reply
@@ -224,6 +243,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         )
         reply_min_similarity = float(os.getenv("REPLY_MIN_SIMILARITY", "0.35"))
         if action == "reply" and run_metadata.get("retrieval_source") == "vector":
+            clarify_prompt = get_clarify_prompt()
             run_metadata["reply_min_similarity"] = reply_min_similarity
             top_similarity = run_metadata.get("top_similarity")
             if isinstance(top_similarity, (int, float)) and top_similarity < reply_min_similarity:
@@ -233,22 +253,19 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 run_metadata["decision_reason_original"] = decision_reason
                 action = "ask_clarifying"
                 confidence = min(confidence, 0.4)
-                reply = (
-                    "Can you add more context (account, steps, and expected behavior)?"
-                )
+                reply = clarify_prompt
                 citations = None
                 run_metadata["decision_source"] = "guardrail"
                 decision_reason = "guardrail_low_similarity"
         if action == "reply" and not citations:
+            clarify_prompt = get_clarify_prompt()
             guardrail_reason = "missing_citations"
             run_metadata["guardrail"] = guardrail_reason
             run_metadata["guardrail_original_action"] = action
             run_metadata["decision_reason_original"] = decision_reason
             action = "ask_clarifying"
             confidence = min(confidence, 0.4)
-            reply = (
-                "Can you add more context (account, steps, and expected behavior)?"
-            )
+            reply = clarify_prompt
             citations = None
             run_metadata["decision_source"] = "guardrail"
             decision_reason = "guardrail_missing_citations"
@@ -866,6 +883,37 @@ async def update_kb(doc_id: str, payload: KBUpdate, request: Request) -> KBDocum
         log_event(logging.INFO, "auto_ingest_skipped", document_id=doc.get("id"))
 
     return KBDocument(**doc)
+
+
+@app.delete("/v1/kb/{doc_id}", status_code=204)
+async def delete_kb(doc_id: str, request: Request) -> Response:
+    try:
+        supabase = get_supabase_client()
+    except RuntimeError as exc:
+        log_event(logging.ERROR, "supabase_not_configured", error=str(exc))
+        raise HTTPException(status_code=500, detail="supabase_not_configured")
+
+    orgs_repo = SupabaseOrgsRepo(supabase)
+    members_repo = SupabaseMembersRepo(supabase)
+    org_id, user_id = resolve_org_context(orgs_repo, members_repo, request)
+    ensure_write_access(request, members_repo, org_id, user_id)
+    kb_repo = SupabaseKBRepo(supabase)
+
+    try:
+        existing = kb_repo.get_document(doc_id)
+        if not existing or existing.get("org_id") != org_id:
+            raise HTTPException(status_code=404, detail="kb_not_found")
+        deleted = kb_repo.delete_document(doc_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_event(logging.ERROR, "db_error", doc_id=doc_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="db_error")
+
+    if not deleted:
+        raise HTTPException(status_code=500, detail="kb_delete_failed")
+
+    return Response(status_code=204)
 
 
 @app.post("/v1/ingest", response_model=IngestResponse)

@@ -117,6 +117,15 @@ class SupabaseKBRepo(KBRepo):
         )
         return result.data[0] if result.data else None
 
+    def delete_document(self, document_id: str) -> bool:
+        result = (
+            self._supabase.table("kb_documents")
+            .delete()
+            .eq("id", document_id)
+            .execute()
+        )
+        return bool(result.data)
+
     def get_document(self, document_id: str) -> dict[str, Any] | None:
         result = (
             self._supabase.table("kb_documents")

@@ -12,10 +12,11 @@ const buildUrl = (path: string) => {
 
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const docId = encodeURIComponent(params.id);
+    const { id } = await params;
+    const docId = encodeURIComponent(id);
     const orgId = request.headers.get("x-org-id");
     const cookieStore = await cookies();
     const token = cookieStore.get("sb_access_token")?.value;
@@ -42,11 +43,12 @@ export async function GET(
 
 export async function PATCH(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const payload = await request.json();
-    const docId = encodeURIComponent(params.id);
+    const { id } = await params;
+    const docId = encodeURIComponent(id);
     const orgId = request.headers.get("x-org-id");
     const cookieStore = await cookies();
     const token = cookieStore.get("sb_access_token")?.value;
@@ -65,6 +67,41 @@ export async function PATCH(
       body: JSON.stringify(payload),
       cache: "no-store",
     });
+    const data = await response.json();
+    return NextResponse.json(data, { status: response.status });
+  } catch (error) {
+    return NextResponse.json(
+      { detail: "agent_unavailable" },
+      { status: 502 }
+    );
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const docId = encodeURIComponent(id);
+    const orgId = request.headers.get("x-org-id");
+    const cookieStore = await cookies();
+    const token = cookieStore.get("sb_access_token")?.value;
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers["X-Org-Id"] = orgId;
+    }
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const response = await fetch(buildUrl(`/v1/kb/${docId}`), {
+      method: "DELETE",
+      headers,
+      cache: "no-store",
+    });
+    if (response.status === 204) {
+      return new NextResponse(null, { status: 204 });
+    }
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

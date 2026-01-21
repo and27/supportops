@@ -141,6 +141,7 @@ create or replace function match_kb_chunks(
 returns table (
   id uuid,
   document_id uuid,
+  org_id uuid,
   chunk_index int,
   content text,
   document_title text,
@@ -155,6 +156,7 @@ as $$
   select
     kc.id,
     kc.document_id,
+    kc.org_id,
     kc.chunk_index,
     kc.content,
     kd.title as document_title,

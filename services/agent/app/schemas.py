@@ -18,7 +18,7 @@ class ChatResponse(BaseModel):
     action: Literal["reply", "ask_clarifying", "create_ticket", "escalate"]
     confidence: float
     ticket_id: str | None = None
-    citations: list[dict[str, str]] | None = None
+    citations: list[dict[str, Any]] | None = None
     decision_reason: str | None = None
     decision_source: str | None = None
     guardrail: str | None = None

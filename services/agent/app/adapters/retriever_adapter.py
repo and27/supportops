@@ -4,16 +4,17 @@ import logging
 import os
 from typing import Any
 
+from ..answer_generator import generate_answer
 from ..embeddings import get_embedding_provider
 from ..logging_utils import log_event
 from ..ports import KBRepo, Retriever
-from .llamaindex_retriever import LlamaIndexRetriever
 from ..retrieval import (
     build_kb_chunk_reply,
     build_kb_reply,
     extract_hash_tags,
     extract_keywords,
 )
+from ..retrieval_selector import build_citations, select_chunks
 
 
 class DefaultRetriever(Retriever):
@@ -22,8 +23,8 @@ class DefaultRetriever(Retriever):
         self._kb_repo = kb_repo
 
     def retrieve(
-        self, message: str, org_id: str | None
-    ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
+        self, message: str, org_id: str | None, trace_id: str | None = None
+    ) -> tuple[str, list[dict[str, Any]], float, dict[str, Any]] | None:
         query = message.strip().replace(",", " ")
         if not query:
             return None
@@ -48,7 +49,7 @@ class DefaultRetriever(Retriever):
                     {"retrieval_source": "document", "document_match_count": len(tagged)},
                 )
 
-        vector_result = self._retrieve_vector(query, org_id)
+        vector_result = self._retrieve_vector(query, org_id, trace_id)
         if vector_result:
             return vector_result
 
@@ -81,8 +82,8 @@ class DefaultRetriever(Retriever):
         return None
 
     def _retrieve_vector(
-        self, query: str, org_id: str | None
-    ) -> tuple[str, list[dict[str, str]], float, dict[str, Any]] | None:
+        self, query: str, org_id: str | None, trace_id: str | None
+    ) -> tuple[str, list[dict[str, Any]], float, dict[str, Any]] | None:
         enabled = os.getenv("VECTOR_SEARCH_ENABLED", "false").lower() == "true"
         if not enabled:
             return None
@@ -94,7 +95,7 @@ class DefaultRetriever(Retriever):
             return None
 
         try:
-            limit = int(os.getenv("VECTOR_MATCH_COUNT", "3"))
+            limit = int(os.getenv("VECTOR_MATCH_COUNT", "10"))
             min_similarity = float(os.getenv("VECTOR_MIN_SIMILARITY", "0.2"))
             embedding = provider.embed([query])[0]
             result = (
@@ -110,28 +111,48 @@ class DefaultRetriever(Retriever):
                 .execute()
             )
             data = result.data or []
-            top_similarity = data[0].get("similarity") if data else None
+            similarities = [
+                row.get("similarity")
+                for row in data
+                if isinstance(row.get("similarity"), (int, float))
+            ]
+            top_similarity = max(similarities) if similarities else None
+            p50 = percentile(similarities, 50)
+            p90 = percentile(similarities, 90)
             log_event(
                 logging.INFO,
                 "kb_vector_matches",
                 count=len(data),
                 top_similarity=top_similarity,
+                similarity_p50=p50,
+                similarity_p90=p90,
                 min_similarity=min_similarity,
             )
             if not data:
                 return None
-            reply, citations = build_kb_chunk_reply(data[0])
-            return (
-                reply,
-                citations,
-                0.9,
-                {
-                    "retrieval_source": "vector",
-                    "match_count": len(data),
-                    "top_similarity": top_similarity,
-                    "min_similarity": min_similarity,
-                },
+            max_chunks = int(os.getenv("RETRIEVAL_MAX_CHUNKS", "4"))
+            max_per_doc = int(os.getenv("RETRIEVAL_MAX_PER_DOC", "2"))
+            selected = select_chunks(data, max_chunks=max_chunks, max_per_doc=max_per_doc)
+            if not selected:
+                return None
+            citations = build_citations(selected)
+            reply, confidence, generation_meta = generate_answer(
+                query,
+                selected,
+                org_id,
+                trace_id,
             )
+            meta = {
+                "retrieval_source": "vector",
+                "match_count": len(data),
+                "selected_count": len(selected),
+                "top_similarity": top_similarity,
+                "similarity_p50": p50,
+                "similarity_p90": p90,
+                "min_similarity": min_similarity,
+            }
+            meta.update(generation_meta)
+            return reply, citations, confidence, meta
         except Exception as exc:
             log_event(logging.ERROR, "kb_vector_search_error", error=str(exc))
             return None
@@ -139,14 +160,18 @@ class DefaultRetriever(Retriever):
 
 def get_retriever(supabase, kb_repo: KBRepo) -> Retriever:
     engine = os.getenv("RETRIEVER_ENGINE", "default").lower()
-    if engine == "default":
-        return DefaultRetriever(supabase, kb_repo)
-    if engine == "llamaindex":
-        try:
-            docs = kb_repo.list_documents(os.getenv("DEFAULT_ORG_ID", ""), 200)
-            return LlamaIndexRetriever(docs)
-        except Exception as exc:
-            log_event(logging.WARNING, "retriever_engine_failed", engine=engine, error=str(exc))
-            return DefaultRetriever(supabase, kb_repo)
-    log_event(logging.WARNING, "retriever_engine_unknown", engine=engine)
+    if engine and engine != "default":
+        log_event(logging.WARNING, "retriever_engine_deprecated", engine=engine)
     return DefaultRetriever(supabase, kb_repo)
+
+
+def percentile(values: list[float], pct: int) -> float | None:
+    if not values:
+        return None
+    if pct <= 0:
+        return min(values)
+    if pct >= 100:
+        return max(values)
+    sorted_values = sorted(values)
+    index = int(round((pct / 100) * (len(sorted_values) - 1)))
+    return sorted_values[index]

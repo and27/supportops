@@ -1,8 +1,10 @@
 "use client";
 
+import { Check, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import { readOrgIdCookie } from "../../lib/org";
 
@@ -35,6 +37,8 @@ export default function KbPage() {
   const [form, setForm] = useState<KbForm>(emptyForm);
   const [status, setStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const docParam = searchParams.get("doc");
 
@@ -80,6 +84,7 @@ export default function KbPage() {
     setSelectedId(null);
     setForm(emptyForm);
     setStatus(null);
+    setConfirmDeleteId(null);
   };
 
   const selectDoc = (doc: KbDoc) => {
@@ -90,6 +95,7 @@ export default function KbPage() {
       tags: doc.tags.join(", "),
     });
     setStatus(null);
+    setConfirmDeleteId(null);
   };
 
   const saveDoc = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -132,12 +138,59 @@ export default function KbPage() {
       await loadDocs();
       if (!selectedId) {
         startNew();
+        toast.success("Article created.");
       } else {
-        setStatus("Saved.");
+        toast.success("Article updated.");
       }
     } catch (error) {
-      setStatus("Could not save the article.");
+      toast.error("Could not save the article.");
     }
+  };
+
+  const deleteDocById = async (docId: string) => {
+    setStatus(null);
+    setIsDeleting(true);
+    try {
+      const orgId = readOrgIdCookie();
+      const headers: Record<string, string> = {};
+      if (orgId) {
+        headers["X-Org-Id"] = orgId;
+      }
+      const response = await fetch(`/api/kb/${docId}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "KB delete failed");
+      }
+      await loadDocs();
+      if (selectedId === docId) {
+        startNew();
+      }
+      toast.success("Article deleted.");
+    } catch (error) {
+      toast.error("Could not delete the article.");
+    } finally {
+      setIsDeleting(false);
+      setConfirmDeleteId(null);
+    }
+  };
+
+  const deleteDoc = async () => {
+    if (!selectedId) {
+      return;
+    }
+    await deleteDocById(selectedId);
+  };
+
+  const requestDelete = (docId: string) => {
+    setConfirmDeleteId(docId);
+    setStatus(null);
+  };
+
+  const cancelDelete = () => {
+    setConfirmDeleteId(null);
   };
 
   return (
@@ -180,21 +233,69 @@ export default function KbPage() {
               <p>No articles yet. Create the first one.</p>
             )}
             {docs.map((doc) => (
-              <button
+              <div
                 key={doc.id}
-                type="button"
-                onClick={() => selectDoc(doc)}
-                className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition ${
                   selectedId === doc.id
                     ? "border-ink bg-white"
                     : "border-line bg-white/70 hover:border-ink/40"
                 }`}
               >
-                <p className="font-medium text-ink">{doc.title}</p>
-                <p className="mt-1 text-xs text-ink/50">
-                  Tags: {doc.tags.length ? doc.tags.join(", ") : "none"}
-                </p>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => selectDoc(doc)}
+                  className="flex-1 text-left"
+                >
+                  <p className="font-medium text-ink">{doc.title}</p>
+                  <p className="mt-1 text-xs text-ink/50">
+                    Tags: {doc.tags.length ? doc.tags.join(", ") : "none"}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Delete ${doc.title}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    requestDelete(doc.id);
+                  }}
+                  className={`flex h-8 w-8 items-center justify-center rounded-full border text-ink/60 transition hover:border-ink/40 ${
+                    confirmDeleteId === doc.id
+                      ? "hidden"
+                      : "border-line"
+                  }`}
+                  disabled={isDeleting}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+                {confirmDeleteId === doc.id && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      aria-label={`Confirm delete ${doc.title}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteDocById(doc.id);
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-full border border-red-200 text-red-500 transition hover:border-red-300"
+                      disabled={isDeleting}
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Cancel delete ${doc.title}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        cancelDelete();
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-ink/60 transition hover:border-ink/40"
+                      disabled={isDeleting}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -248,12 +349,44 @@ export default function KbPage() {
               />
             </div>
             {status && <p className="text-sm text-ink/60">{status}</p>}
-            <button
-              type="submit"
-              className="h-11 rounded-2xl bg-ink px-6 text-sm font-medium text-paper"
-            >
-              {selectedId ? "Save changes" : "Create article"}
-            </button>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="submit"
+                className="h-11 rounded-2xl bg-ink px-6 text-sm font-medium text-paper"
+              >
+                {selectedId ? "Save changes" : "Create article"}
+              </button>
+              {selectedId && confirmDeleteId !== selectedId && (
+                <button
+                  type="button"
+                  onClick={() => requestDelete(selectedId)}
+                  className="h-11 rounded-2xl border border-red-200 px-6 text-sm font-medium text-red-500"
+                  disabled={isDeleting}
+                >
+                  Delete article
+                </button>
+              )}
+              {selectedId && confirmDeleteId === selectedId && (
+                <>
+                  <button
+                    type="button"
+                    onClick={deleteDoc}
+                    className="h-11 rounded-2xl bg-red-500 px-6 text-sm font-medium text-white"
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? "Deleting..." : "Confirm delete"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelDelete}
+                    className="h-11 rounded-2xl border border-line px-6 text-sm font-medium text-ink/70"
+                    disabled={isDeleting}
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
           </form>
         </div>
       </section>

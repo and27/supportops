@@ -3,13 +3,15 @@ import re
 from typing import Any
 
 from .logging_utils import log_event
+from .prompts import get_clarify_prompt
 
 
 def decide_response(message: str) -> tuple[str, str, float, str]:
     msg = message.strip().lower()
+    clarify_prompt = get_clarify_prompt()
     if not msg:
         return (
-            "Please share a bit more detail so I can help.",
+            clarify_prompt,
             "ask_clarifying",
             0.2,
             "heuristic_empty",
@@ -34,7 +36,7 @@ def decide_response(message: str) -> tuple[str, str, float, str]:
 
     if len(msg.split()) < 4:
         return (
-            "Can you add more context (account, steps, and expected behavior)?",
+            clarify_prompt,
             "ask_clarifying",
             0.45,
             "heuristic_short",
@@ -50,6 +52,7 @@ def decide_response(message: str) -> tuple[str, str, float, str]:
 
 def precheck_action(message: str) -> tuple[str, str, float, str] | None:
     msg = message.strip().lower()
+    clarify_prompt = get_clarify_prompt()
     tags = extract_hash_tags(msg)
     if "#" in msg:
         log_event(
@@ -60,7 +63,7 @@ def precheck_action(message: str) -> tuple[str, str, float, str] | None:
         )
     if not msg:  # empty or whitespace
         return (
-            "Please share a bit more detail so I can help.",
+            clarify_prompt,
             "ask_clarifying",
             0.2,
             "precheck_empty",
@@ -80,7 +83,7 @@ def precheck_action(message: str) -> tuple[str, str, float, str] | None:
 
     if len(msg.split()) < 4:
         return (
-            "Can you add more context (account, steps, and expected behavior)?",
+            clarify_prompt,
             "ask_clarifying",
             0.45,
             "precheck_short",
@@ -114,18 +117,18 @@ def extract_keywords(message: str) -> list[str]:
 
 
 
-def build_kb_reply(document: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+def build_kb_reply(document: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     title = document.get("title", "Knowledge Base")
     content = document.get("content", "")
     excerpt = content.strip().replace("\n", " ")
     if len(excerpt) > 360:
         excerpt = f"{excerpt[:360].rstrip()}..."
     reply = f"{title}: {excerpt}"
-    citations = [{"kb_document_id": document.get("id", "")}]
+    citations = [{"kb_document_id": document.get("id", ""), "source": title}]
     return reply, citations
 
 
-def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     title = chunk.get("document_title") or "Knowledge Base"
     content = chunk.get("content", "")
     excerpt = content.strip().replace("\n", " ")
@@ -136,7 +139,8 @@ def build_kb_chunk_reply(chunk: dict[str, Any]) -> tuple[str, list[dict[str, str
         {
             "kb_document_id": chunk.get("document_id", ""),
             "kb_chunk_id": chunk.get("id", ""),
+            "source": title,
+            "score": chunk.get("similarity"),
         }
     ]
     return reply, citations
-

@@ -38,11 +38,15 @@ This roadmap tracks the learning-focused agent system work. It is not user-facin
 - Keep Supabase adapter as default implementation
 - Expand adapter contract tests for neutrality
 
-### Epic 6: Retrieval Engine Adapter
-- Introduce `Retriever` interface (current RAG vs external engines)
-- Adapter 1: existing vector+text retrieval
-- Adapter 2: LlamaIndex (optional) for top-k + rerank
-- Standardize output: citations + similarity + retrieval_source
+### Epic 6: RAG v2 (Vector-only, incremental, multi-tenant)
+- Remove LlamaIndex adapter + dependency (in-memory index is not scalable)
+- Vector retrieval via `match_kb_chunks` only (top_k default 10)
+- Selector: dedupe + diversity + 2–4 chunks max
+- Optional rerank (listwise) behind feature flag + similarity heuristics
+- LLM answer generation from selected chunks with structured citations
+- Standardize retriever output: reply + citations + confidence + meta
+- Telemetry for rerank/generation timings + top_similarity distribution
+- Tests: selector, rerank fallback, generation fallback
 
 ### Epic 4b: Adapter Completion (Supabase)
 - Migrate remaining endpoints to repo interfaces (KB, tickets, orgs, runs)

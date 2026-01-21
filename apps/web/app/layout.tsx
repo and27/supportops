@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { DM_Mono, Sora } from "next/font/google";
+import { Toaster } from "sonner";
 import "./globals.css";
 import NavBar from "../components/NavBar";
 
@@ -30,6 +31,7 @@ export default function RootLayout({
       <body className={`${sora.variable} ${dmMono.variable} antialiased`}>
         <NavBar />
         {children}
+        <Toaster position="bottom-right" richColors />
       </body>
     </html>
   );
