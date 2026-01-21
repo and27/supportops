@@ -2,7 +2,9 @@
 
 This roadmap tracks the learning-focused agent system work. It is not user-facing.
 
-## Status Summary (Completed)
+## Status Summary
+
+### Completed
 
 ### Epic 1: Observability base
 - Structured logs with retrieval + decision metadata
@@ -24,34 +26,39 @@ This roadmap tracks the learning-focused agent system work. It is not user-facin
 - Runner reports category metrics and enforces thresholds
 - CI workflow runs `run_eval.py`
 
-## Platform Foundation (Next)
+### In Progress
 
-### Epic 4: Core Platform Abstractions (Clean Architecture)
-- Introduce repo interfaces: conversations, messages, KB, runs, orgs
-- Default adapter: Supabase (current behavior)
-- Define service layer (decision + retrieval orchestration)
-- DTOs/ports to keep HTTP/DB boundaries clean
-- Add integration tests for repo adapters
+#### Epic 4: Core Platform Abstractions (Clean Architecture)
+- Repo interfaces: conversations, messages, KB, runs, orgs
+- Default adapter: Supabase
+- Adapter contract tests
+- Pending: extract service layer from `main.py` into a dedicated module
 
-### Epic 5: Storage Adapter Neutrality
-- Remove remaining direct Supabase usage outside adapters
-- Keep Supabase adapter as default implementation
-- Expand adapter contract tests for neutrality
+#### Epic 5: Storage Adapter Neutrality
+- Remaining direct Supabase usage moved into adapters
+- Supabase remains default implementation
+- Pending: complete service-layer isolation to keep HTTP/DB boundaries clean
 
-### Epic 6: RAG v2 (Vector-only, incremental, multi-tenant)
-- Remove LlamaIndex adapter + dependency (in-memory index is not scalable)
-- Vector retrieval via `match_kb_chunks` only (top_k default 10)
-- Selector: dedupe + diversity + 2–4 chunks max
-- Optional rerank (listwise) behind feature flag + similarity heuristics
+#### Epic 6: RAG v2 (Vector-only, incremental, multi-tenant)
+- Removed LlamaIndex adapter + dependency (vector-only path)
+- Vector retrieval via `match_kb_chunks` (top_k default 10)
+- Selector: dedupe + diversity + 2-4 chunks max
 - LLM answer generation from selected chunks with structured citations
 - Standardize retriever output: reply + citations + confidence + meta
-- Telemetry for rerank/generation timings + top_similarity distribution
+- Telemetry for retrieval/generation timings + top_similarity distribution
+- Ensure RPC returns `org_id` for strict multi-tenant filtering
+- Optional rerank (listwise) behind feature flag + similarity heuristics
 - Tests: selector, rerank fallback, generation fallback
 
-### Epic 4b: Adapter Completion (Supabase)
-- Migrate remaining endpoints to repo interfaces (KB, tickets, orgs, runs)
-- Introduce a retriever adapter wrapper used by the service layer
-- Add integration tests for adapters (beyond contract tests)
+## Next Steps (Current Focus)
+
+1) Extract service layer from `services/agent/app/main.py`
+   - New module for decision + retrieval orchestration
+   - `main.py` becomes router + dependency injection only
+   - Add unit tests for service functions
+2) Finish RAG v2 safeguards
+   - Optional rerank gating thresholds (if enabled)
+   - Retrieval quality tuning (per-tenant thresholds)
 
 ## Known Limitations
 
